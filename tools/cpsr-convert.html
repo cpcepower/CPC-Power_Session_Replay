@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CPSR Convert - sessions WinAPE SNR vers CPSR</title>
+<style>
+html { background: #10141c; color: #d7dde8; font-family: system-ui, sans-serif; margin: 0; }
+body { max-width: 900px; margin: 0 auto; padding: 1rem; }
+h1 { font-size: 1.3rem; }
+h2 { font-size: 1.05rem; margin-top: 1.4rem; }
+p { line-height: 1.45; }
+.notice { color: #9fb0cc; font-size: 0.9rem; }
+#zone-options, #zone-depots, .carte, #journal {
+  background: #1a2030; border: 1px solid #2d3900; border-radius: 6px;
+  padding: 0.6rem 0.8rem; margin: 0.6rem 0;
+}
+#zone-options label { display: inline-block; margin-right: 1.2rem; }
+#zone-depots { border: 2px dashed #3a4a6a; text-align: center; }
+#zone-depots.survol { border-color: #ffd24a; background: #21283c; }
+#zone-cartes { margin-top: 0.6rem; }
+.carte { font-size: 0.9rem; }
+.carte .titre { font-weight: bold; }
+.carte .ok { color: #6fe08a; }
+.carte .ko { color: #ff7a6f; }
+.carte .info { color: #9fb0cc; }
+.carte pre { white-space: pre-wrap; margin: 0.2rem 0; font-family: inherit; }
+button { background: #2d3900; color: #fff; border: 0; border-radius: 4px;
+  padding: 0.35rem 0.9rem; margin: 0.15rem 0.2rem; cursor: pointer; }
+button:hover { background: #3e4d00; }
+#journal { font-family: ui-monospace, monospace; font-size: 0.8rem;
+  white-space: pre-wrap; max-height: 320px; overflow-y: auto; }
+footer p { color: #7d8aa5; font-size: 0.8rem; border-top: 1px solid #2d3900;
+  padding-top: 0.5rem; }
+</style>
+</head>
+<body>
+<h1>Convertisseur SNR - CPSR</h1>
+<p class="notice">Sessions enregistrées WinAPE (.snr) au format CPSR (CPC Power Session Replay, spécification v0.2), synchronisé sur les interruptions Gate Array de la machine émulée. Outil autonome : aucune dépendance, aucun accès réseau, fonctionne depuis un fichier local. Déposez un .cpsr pour le vérifier. Cf. SPEC.md dans le dépôt.</p>
+
+<div id="zone-options">
+  <label><input type="checkbox" id="opt-crc" checked> CRC32 par chunk</label>
+  <label><input type="checkbox" id="opt-embed"> Embarquer les médias fournis (EMDA / EMDB)</label>
+  <label for="opt-auteur">Auteur : <input type="text" id="opt-auteur" size="24"></label>
+</div>
+
+<div id="zone-depots">
+  <p>Déposez ici les fichiers<br>
+  (ou utilisez le sélecteur ci-dessous) :</p>
+  <p><input type="file" id="fichiers" multiple accept=".snr,.cpsr,.dsk,.hfe,.raw,.ipf,.cpr"></p>
+  <p class="info">.snr : session à convertir &nbsp;/&nbsp; .cpsr : session à vérifier<br>
+  .dsk, .hfe, .raw, .ipf, .cpr : médias référencés par la session (facultatifs, reconnus par nom)</p>
+</div>
+
+<div id="zone-cartes"></div>
+
+<p>
+<button type="button" id="btn-tout">Tout convertir</button>
+<button type="button" id="btn-test">Self-test</button>
+</p>
+
+<h2>Journal</h2>
+<div id="journal" aria-live="polite"></div>
+
+<footer>
+<p>lot 202611.1.1 - (c) 2026 Megachur - GPL-3.0-or-later (cf. LICENSE du dépôt).</p>
+</footer>
+
+<script>
+'use strict';
+/* CPSR-CORE-BEGIN */
+const VERSION = '202611.1.1';
+const EV = { END: 0x00, KEYDOWN: 0x01, KEYUP: 0x02, KEYSYNC: 0x03, JOY: 0x04,
+  SCAN: 0x05, NOP: 0x0F, SNAP: 0x10, WMEM: 0x20, WPC: 0x21, WJOY: 0x22,
+  MARK: 0xF0, NOTE: 0xF1 };
+const TAILLES_PAYLOAD = { 0x00: 0, 0x01: 2, 0x02: 2, 0x03: 10, 0x04: 2,
+  0x05: 2, 0x0F: 0, 0x10: 1, 0x20: 6, 0x21: 6, 0x22: 0, 0xF0: 2, 0xF1: -1 };
+
+function CpsrErreur(message) { const e = new Error(message); e.name = 'CpsrErreur'; return e; }
+
+const CRC32_TABLE = (function () {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) { c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); }
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+// CRC32 sur une suite de régions (concaténées)
+function crc32(regions) {
+  let c = 0xFFFFFFFF;
+  for (const r of regions) {
+    for (let i = 0; i < r.length; i++) { c = CRC32_TABLE[(c ^ r[i]) & 0xFF] ^ (c >>> 8); }
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function u16le(x) { return [x & 0xFF, (x >>> 8) & 0xFF]; }
+function u32le(x) { return [x & 0xFF, (x >>> 8) & 0xFF, (x >>> 16) & 0xFF, (x >>> 24) & 0xFF]; }
+function u64le(x) {
+  const b = [];
+  let v = x;
+  for (let i = 0; i < 8; i++) { b.push(v & 0xFF); v = Math.floor(v / 256); }
+  return b;
+}
+function lireU16le(u8, o) { return u8[o] | (u8[o + 1] << 8); }
+function lireU32le(u8, o) { return (u8[o] | (u8[o + 1] << 8) | (u8[o + 2] << 16)) + u8[o + 3] * 0x1000000; }
+function asciiOctets(s, limite) {
+  let t = s;
+  if (t.length > limite) { t = t.slice(0, limite); }
+  const a = [];
+  for (let i = 0; i < t.length; i++) { a.push(t.charCodeAt(i) & 0xFF); }
+  return a;
+}
+function chaineOctets(u8, debut, longueur) {
+  let s = '';
+  for (let i = 0; i < longueur && debut + i < u8.length; i++) { s += String.fromCharCode(u8[debut + i] & 0xFF); }
+  return s;
+}
+function chaineCoupee(u8, debut, longueur) {
+  const s = chaineOctets(u8, debut, longueur);
+  const z = s.indexOf('\u0000');
+  return z >= 0 ? s.slice(0, z) : s;
+}
+function nomBase(s) {
+  const b = s.lastIndexOf('\\'), f = s.lastIndexOf('/');
+  const c = Math.max(b, f);
+  return c >= 0 ? s.slice(c + 1) : s;
+}
+function extensionFormat(nom) {
+  const e = nom.slice(nom.lastIndexOf('.') + 1).toLowerCase();
+  if (e === 'dsk') return 0;
+  if (e === 'hfe') return 1;
+  if (e === 'raw') return 2;
+  if (e === 'ipf') return 3;
+  if (e === 'cpr') return 4;
+  return -1;
+}
+const NOMS_MODELE = ['CPC 464', 'CPC 664', 'CPC 6128', 'inconnu', 'CPC 6128+', 'CPC 464+', 'GX4000'];
+const NOMS_FORMAT = ['DSK', 'HFE', 'RAW', 'IPF', 'CPR'];
+
+// ---------------------------------------------------------------------------
+// Lecture d'une session WinAPE (miroir de fileSNA() / snrPlayFrame() de CPCEPower,
+// fichiers SNR.cpp / SNA.cpp de l'émulateur CPCEPower, lui-même miroir de WinAPE).
+// ---------------------------------------------------------------------------
+function parseSNR(u8) {
+  const warnings = [];
+  if (!(u8 instanceof Uint8Array) || u8.length < 0x101) {
+    throw CpsrErreur('Fichier trop court pour être une session (' + (u8 ? u8.length : 0) + ' octets)');
+  }
+  const magic = chaineOctets(u8, 0, 8);
+  if (magic !== 'RW - SNR' && magic !== 'MV - SNA') {
+    throw CpsrErreur('Magic invalide (attendu "RW - SNR" ou "MV - SNA", lu "' + magic.replace(/[^\x20-\x7E]/g, '?') + '")');
+  }
+  const version = u8[0x10];
+  if (version !== 3) { throw CpsrErreur('Version SNA ' + version + ' non supportée (v3 attendue)'); }
+  if (lireU16le(u8, 0x6b) !== 0) {
+    throw CpsrErreur('Dump mémoire non nul à 0x6b : pas une session à blocs (format non géré)');
+  }
+  const model = u8[0x6d];
+  const crtcType = u8[0xa4];
+  const vs = (u8[0xb0] & 0x01) === 1;
+  const emulator = chaineCoupee(u8, 0xe0, 0x20);
+
+  // ---- balayage des blocs depuis 0x100 (label 4 caractères, longueur u32 LE) ----
+  const len = u8.length;
+  let pos = 0x100;
+  const blocks = [];
+  let snrOff = -1;
+  let dscaNom = '', dscbNom = '';
+  while (pos + 4 <= len) {
+    const label = chaineOctets(u8, pos, 4);
+    if (label === 'SNR ') {
+      // Miroir : le bloc SNR n'a pas de longueur - 10 octets matrice clavier,
+      // 72 octets ignorés (dont le champ u32 juste avant le flux), flux jusqu'à la fin du fichier.
+      if (pos + 86 > len) { throw CpsrErreur('Bloc SNR tronqué'); }
+      snrOff = pos;
+      break;
+    }
+    if (pos + 8 > len) {
+      warnings.push('Octets résiduels en fin de fichier (' + (len - pos) + ' octets, hors bloc)');
+      pos = len;
+      break;
+    }
+    const chunkLen = lireU32le(u8, pos + 4);
+    if (label === 'SNRV') {
+      // Miroir du lecteur CPCEPower : la longueur est lue mais un seul octet est sauté (v1 attendu).
+      if (chunkLen !== 1) { warnings.push('Chunk SNRV de longueur ' + chunkLen + ' (v1 attendue)'); }
+      blocks.push({ label: label, off: pos, conso: 9 });
+      pos += 9;
+      continue;
+    }
+    if (pos + 8 + chunkLen > len) {
+      warnings.push('Chunk ' + label.replace(/[^\x20-\x7E]/g, '?') + ' tronqué : balayage interrompu');
+      pos = len;
+      break;
+    }
+    if (label === 'DSCA' || label === 'DSCB') {
+      if (chunkLen < 4096) {
+        const nom = chaineOctets(u8, pos + 8, chunkLen);
+        if (label === 'DSCA') { dscaNom = nomBase(nom); } else { dscbNom = nomBase(nom); }
+      } else {
+        warnings.push('Chunk ' + label + ' de longueur insolite (' + chunkLen + '), non lu comme un nom');
+      }
+    } else if (label !== 'MEM0' && label !== 'MEM1' && label !== 'MEM2' && label !== 'MEM3'
+      && label !== 'MEM4' && label !== 'MEM5' && label !== 'MEM6' && label !== 'MEM7'
+      && label !== 'MEM8' && label !== 'ROMS' && label !== 'CPC+'
+      && !/^MX[0-9A-F][0-9A-F]$/.test(label)) {
+      warnings.push('Chunk inconnu "' + label.replace(/[^\x20-\x7E]/g, '?') + '" ignoré (' + chunkLen + ' octets)');
+    }
+    blocks.push({ label: label, off: pos, conso: 8 + chunkLen });
+    pos += 8 + chunkLen;
+  }
+  if (snrOff < 0) { throw CpsrErreur('Aucun bloc SNR : ce fichier n\'est pas une session enregistrée'); }
+
+  const keysInit = u8.slice(snrOff + 4, snrOff + 14);
+  const statBytes = u8.slice(0x10, snrOff);
+  const stream = u8.slice(snrOff + 86);
+
+  // ---- flux d'événements : miroir de snrPlayFrame() ----
+  const events = [];
+  const stats = { appuis: 0, relachements: 0, autoRepeat: 0, synchronisation: 0,
+    souris: 0, rtc: 0, blocs: 0, trames: 0 };
+  let totalFrames = 0;
+  let endDelta = 0;
+  const matrix = Array.prototype.slice.call(keysInit);
+  const emit = (type, line, mask, delta) => {
+    events.push({ type: type, line: line, mask: mask, delta: delta });
+    totalFrames += delta;
+  };
+  const n = stream.length;
+  let i = 0;
+  let acc = 0;
+  let lastKeyIdx = 0, lastKeyCount = 0, keyIdxValide = false;
+  let compteFinalSansBloc = false;
+
+  // Miroir : lecture d'un compte de trames (u8, ou 0x00 + u16 LE ; garde (i+1) < n).
+  // La valeur brute est retournée telle quelle (0 possible) ; l'ajustement VS du
+  // compte initial s'applique avant toute substitution défensive.
+  const lireCompte = () => {
+    let c = stream[i++];
+    if (c !== 0) { return { v: c, t: false }; }
+    if (i + 1 < n) { c = stream[i] | (stream[i + 1] << 8); i += 2; return { v: c, t: false }; }
+    warnings.push('Compte de trames tronqué (u16 absent)');
+    return { v: 0, t: true };
+  };
+
+  const toggler = (b, d0, premier) => {
+    const line = b >> 3;
+    const mask = 1 << (b & 7);
+    if (line >= 10) {
+      warnings.push('Code de touche hors matrice (0x' + b.toString(16) + ') ignoré');
+      return;
+    }
+    const was = (matrix[line] & mask) !== 0;
+    if (was) { matrix[line] &= ~mask; } else { matrix[line] |= mask; }
+    emit(was ? EV.KEYUP : EV.KEYDOWN, line, mask, premier ? d0 : 0);
+    if (was) { stats.relachements++; } else { stats.appuis++; }
+  };
+
+  if (n === 0) {
+    warnings.push("Flux d'événements vide : session terminée immédiatement");
+  } else {
+    // Miroir du chargeur : compte initial, +1 si VS (première VBL vue comme une trame à part).
+    const r = lireCompte();
+    let c0 = r.v + (vs ? 1 : 0);
+    if (c0 === 0) { c0 = 1; warnings.push('Compte de trames initial nul (1 interruption substituée)'); }
+    acc = c0;
+    for (;;) {
+      if (i >= n) {
+        // Le flux s'éteint ; s'il reste un compte lu non suivi d'un bloc, la fin est
+        // défensive (CPCEPower reste bloqué sur place dans ce cas).
+        endDelta = acc;
+        if (compteFinalSansBloc) { warnings.push('Compte de fin sans bloc : END émis ' + acc + ' interruption(s) plus loin'); }
+        break;
+      }
+      let cc = stream[i++];
+      const d0 = acc;
+      acc = 0;
+      let emis = false;
+      if (cc & 0x80) {
+        // Miroir : bloc de synchronisation - 4 octets (PC bas, VLC, HCC, cycles) à consommer.
+        stats.synchronisation++;
+        if (i + 4 > n) {
+          warnings.push('Bloc de synchronisation tronqué');
+          i = n;
+        } else { i += 4; }
+        cc &= 0x7F;
+      }
+      stats.blocs++;
+      // Le compte précédent était bien suivi d'un bloc.
+      compteFinalSansBloc = false;
+      if (cc === 0x7F) {
+        // Miroir : répétition du dernier bloc de touches (re-toggle des octets,
+        // le pointeur de lecture n'avance pas).
+        stats.autoRepeat++;
+        if (keyIdxValide && lastKeyCount > 0 && lastKeyIdx + lastKeyCount <= n) {
+          for (let k = 0; k < lastKeyCount; k++) {
+            const b = stream[lastKeyIdx + k];
+            if (b <= 0x7F) { toggler(b, d0, !emis); emis = true; }
+          }
+        } else if (lastKeyCount > 0) {
+          warnings.push('Répétition 0x7F hors flux : ignorée');
+        }
+      } else {
+        // Miroir : le suivi du dernier bloc de touches ne s'applique que si le premier
+        // changement est une touche (un bloc de synchronisation seul doit conserver les
+        // touches gardées pour la répétition 0x7F).
+        const premierEstTouche = cc > 0 && i < n && stream[i] <= 0x7F;
+        if (premierEstTouche) { lastKeyIdx = i; lastKeyCount = 0; keyIdxValide = true; }
+        let touchesSeules = premierEstTouche;
+        let chg = 0;
+        while (chg < cc && i < n) {
+          const b = stream[i++];
+          if (b <= 0x7F) {
+            toggler(b, d0, !emis);
+            emis = true;
+            if (touchesSeules) { lastKeyCount++; }
+          } else {
+            touchesSeules = false;
+            if (b >= 0xE0) {
+              // Mise à jour RTC : (b ET 0x1F) + 1 octets suivants.
+              stats.rtc++;
+              const s = (b & 0x1F) + 1;
+              if (i + s > n) { i = n; warnings.push('Mise à jour RTC tronquée'); } else { i += s; }
+            } else {
+              // Mise à jour souris : sauts par drapeaux dans l'ordre MB, MX, MY, MW.
+              stats.souris++;
+              let s = (b & 0x01) ? 1 : 0;
+              if (b & 0x60) { s += (b & 0x40) ? 2 : 1; }
+              if (b & 0x18) { s += (b & 0x10) ? 2 : 1; }
+              if (b & 0x06) { s += (b & 0x04) ? 2 : 1; }
+              if (i + s > n) { i = n; warnings.push('Mise à jour souris tronquée'); } else { i += s; }
+            }
+          }
+          chg++;
+        }
+      }
+      if (!emis) { acc = d0; }
+      // Miroir : lecture du compte suivant ; en fin de flux, la relecture s'arrête (snrPlaying = false).
+      if (i >= n) {
+        endDelta = acc;
+        if (compteFinalSansBloc) { warnings.push('Compte de fin sans bloc : END émis ' + acc + ' interruption(s) plus loin'); }
+        break;
+      }
+      const r2 = lireCompte();
+      if (r2.v === 0) { warnings.push('Compte de trames nul (1 interruption substituée)'); acc += 1; }
+      else { acc += r2.v; }
+      compteFinalSansBloc = true;
+    }
+  }
+  totalFrames += endDelta;
+  stats.trames = totalFrames;
+
+  return { warnings: warnings, model: model, crtcType: crtcType, vs: vs,
+    emulator: emulator, keysInit: keysInit, statBytes: statBytes, blocks: blocks,
+    dscaNom: dscaNom, dscbNom: dscbNom, streamLongueur: n,
+    events: events, endDelta: endDelta, stats: stats,
+    totalFrames: totalFrames, nbEvents: events.length };
+}
+
+// ---------------------------------------------------------------------------
+// Construction d'un conteneur CPSR v1 depuis une session SNR analysée.
+// ---------------------------------------------------------------------------
+function buildCpsr(p, options) {
+  const opts = options || {};
+  const warnings = p.warnings.slice();
+  const ajoute = (id, payload) => ({ id: id, payload: payload });
+  const chunks = [];
+  const avecCrc = opts.crc32 !== false;
+  const epoch = Math.floor((opts.epoch !== undefined ? opts.epoch : Date.now()) / 1000);
+
+  let emul = p.emulator ? (p.emulator + ' / ') : '';
+  emul += 'cpsr-convert ' + VERSION;
+  if (emul.length > 255) { emul = emul.slice(0, 255); warnings.push('Chaîne émulateur tronquée à 255 octets'); }
+  const emulOctets = asciiOctets(emul, 255);
+
+  const head = [].concat([p.model & 0xFF], [p.crtcType & 0xFF],
+    u32le(p.totalFrames), u32le(p.nbEvents), u64le(epoch),
+    [emulOctets.length], emulOctets, u32le(p.totalFrames));
+  chunks.push(ajoute('HEAD', new Uint8Array(head)));
+  chunks.push(ajoute('STAT', p.statBytes));
+  chunks.push(ajoute('KEYI', p.keysInit));
+
+  const media = opts.media || {};
+  const chercheMedia = (nom) => {
+    if (!nom) { return undefined; }
+    let v = media[nom.toLowerCase()];
+    if (v !== undefined) { return v; }
+    return media[nomBase(nom).toLowerCase()];
+  };
+  const pousseMedia = (drive, nom) => {
+    if (!nom) { return; }
+    let fmt = extensionFormat(nom);
+    if (fmt < 0) { warnings.push('Format média inconnu pour "' + nom + '" (DSK par défaut)'); fmt = 0; }
+    const octetsNom = asciiOctets(nom, 255);
+    if (octetsNom.length > 255) { return; }
+    const present = chercheMedia(nom);
+    const mdia = [].concat([drive], [fmt], u32le(present ? present.length : 0),
+      [1], [octetsNom.length], octetsNom);
+    chunks.push(ajoute('MDIA', new Uint8Array(mdia)));
+    if (opts.embed && present) {
+      chunks.push(ajoute(drive === 0 ? 'EMDA' : 'EMDB', present));
+    } else if (opts.embed && !present) {
+      warnings.push('Embarquement demandé mais média "' + nom + '" non fourni');
+    }
+  };
+  pousseMedia(0, p.dscaNom);
+  pousseMedia(1, p.dscbNom);
+
+  const ev = [];
+  const deltaEmis = (d) => {
+    let x = d;
+    while (x > 65534) { ev.push(EV.NOP); ev.push.apply(ev, u16le(65534)); x -= 65534; }
+    return x;
+  };
+  for (const e of p.events) {
+    const d = deltaEmis(e.delta);
+    ev.push(e.type); ev.push.apply(ev, u16le(d));
+    if (e.type === EV.KEYDOWN || e.type === EV.KEYUP) { ev.push(e.line, e.mask); }
+  }
+  const df = deltaEmis(p.endDelta);
+  ev.push(EV.END); ev.push.apply(ev, u16le(df));
+  chunks.push(ajoute('EVNT', new Uint8Array(ev)));
+
+  const meta = {
+    source: opts.sourceName || '',
+    convertisseur: 'cpsr-convert',
+    version: VERSION,
+    date: opts.dateIso || new Date().toISOString(),
+    auteur: opts.auteur || '',
+    'second-hand': true,
+    statistiques: {
+      appuis: p.stats.appuis, relachements: p.stats.relachements,
+      autoRepeat: p.stats.autoRepeat, synchronisation: p.stats.synchronisation,
+      souris: p.stats.souris, rtc: p.stats.rtc, blocs: p.stats.blocs,
+      trames: p.totalFrames
+    },
+    avertissements: warnings
+  };
+  const metaTexte = JSON.stringify(meta);
+  const metaOctets = [];
+  for (let k = 0; k < metaTexte.length; k++) { metaOctets.push(metaTexte.charCodeAt(k) & 0xFF); }
+  chunks.push(ajoute('META', new Uint8Array(metaOctets)));
+
+  const flags = avecCrc ? 1 : 0;
+  const cont = [].concat([0x43, 0x50, 0x53, 0x52], u16le(1), u16le(flags), u32le(chunks.length));
+  for (const c of chunks) {
+    cont.push.apply(cont, asciiOctets(c.id, 4));
+    cont.push.apply(cont, u32le(c.payload.length));
+    for (let k = 0; k < c.payload.length; k++) { cont.push(c.payload[k]); }
+    if (avecCrc) {
+      const creg = [new Uint8Array(asciiOctets(c.id, 4)),
+        new Uint8Array(u32le(c.payload.length)), c.payload];
+      cont.push.apply(cont, u32le(crc32(creg)));
+    }
+  }
+  return { bytes: new Uint8Array(cont), chunks: chunks, flags: flags, total: cont.length };
+}
+
+// ---------------------------------------------------------------------------
+// Lecture de contrôle d'un conteneur CPSR (mode vérification).
+// ---------------------------------------------------------------------------
+function parseCPSR(u8) {
+  const warnings = [];
+  if (!(u8 instanceof Uint8Array) || u8.length < 12) { throw CpsrErreur('Fichier trop court (' + (u8 ? u8.length : 0) + ' octets)'); }
+  if (chaineOctets(u8, 0, 4) !== 'CPSR') { throw CpsrErreur('Magic invalide (CPSR attendu)'); }
+  const version = lireU16le(u8, 4);
+  if (version !== 1) { warnings.push('Version de format ' + version + ' (1 attendu) : tentative de lecture quand même'); }
+  const flags = lireU16le(u8, 6);
+  if (flags & ~0x0F) { warnings.push('Drapeaux inconnus (0x' + flags.toString(16) + ')'); }
+  const avecCrc = (flags & 1) !== 0;
+  if ((flags & 2) !== 0) { warnings.push('Drapeau de compression réservé inattendu'); }
+  if ((flags & 4) !== 0) { warnings.push('Drapeau RSYN inattendu (un convertisseur ne produit pas de points de contrôle)'); }
+  let nChunks = lireU32le(u8, 8);
+  if (nChunks > 4096) { warnings.push('Nombre de chunks insolite (' + nChunks + ') : lecture bornée'); nChunks = 4096; }
+  let pos = 12;
+  const chunks = [];
+  let crcTousOk = true;
+  let crcPresent = false;
+  let head = null, keyi = null, media = [], emd = [], evnt = null, meta = null;
+  for (let k = 0; k < nChunks; k++) {
+    if (pos + 8 > u8.length) { warnings.push('Conteneur tronqué au chunk ' + k); break; }
+    const id = chaineOctets(u8, pos, 4);
+    const l = lireU32le(u8, pos + 4);
+    const finPayload = pos + 8 + l;
+    let crcOk = null;
+    let finChunk = finPayload;
+    if (finPayload > u8.length) {
+      warnings.push('Chunk ' + id + ' tronqué (longueur ' + l + ')');
+      break;
+    }
+    if (avecCrc) {
+      if (finPayload + 4 > u8.length) { warnings.push('CRC du chunk ' + id + ' absent'); break; }
+      crcPresent = true;
+      const stocke = lireU32le(u8, finPayload);
+      const calc = crc32([new Uint8Array(u8.slice(pos, pos + 4)),
+        new Uint8Array(u8.slice(pos + 4, pos + 8)),
+        new Uint8Array(u8.slice(pos + 8, finPayload))]);
+      crcOk = stocke === calc;
+      if (!crcOk) { crcTousOk = false; warnings.push('CRC32 invalide pour ' + id + ' (stocké 0x' + stocke.toString(16) + ', calculé 0x' + calc.toString(16) + ')'); }
+      finChunk = finPayload + 4;
+    }
+    const payload = u8.slice(pos + 8, finPayload);
+    pos = finChunk;
+    if (id === 'HEAD') {
+      if (payload.length < 23) { warnings.push('Chunk HEAD trop court'); }
+      else {
+        const dm = payload[18];
+        let d = 19 + dm;
+        if (d + 4 > payload.length) { warnings.push('Chaîne émulateur de HEAD trop longue'); d = Math.max(19, payload.length - 4); }
+        let ep = 0;
+        for (let q = 7; q >= 0; q--) { ep = ep * 256 + payload[10 + q]; }
+        head = { model: payload[0], crtcType: payload[1],
+          nbInterruptions: lireU32le(payload, 2), nbEvents: lireU32le(payload, 6),
+          epoch: ep,
+          emulateur: chaineOctets(payload, 19, dm),
+          duree: d + 4 <= payload.length ? lireU32le(payload, d) : null };
+      }
+    } else if (id === 'KEYI') {
+      keyi = payload;
+      if (payload.length !== 10) { warnings.push('Chunk KEYI de longueur ' + payload.length + ' (10 attendues)'); }
+    } else if (id === 'EVNT') {
+      const evs = [];
+      let q = 0;
+      let finVu = false;
+      let residu = false;
+      while (q < payload.length) {
+        if (finVu) { residu = true; break; }
+        if (q + 3 > payload.length) { warnings.push('EVNT : événement tronqué'); break; }
+        const t = payload[q];
+        const d = lireU16le(payload, q + 1);
+        if (t === EV.END) { evs.push({ type: t, delta: d }); q += 3; finVu = true; continue; }
+        let taille = TAILLES_PAYLOAD[t];
+        if (taille === undefined) { warnings.push('EVNT : type inconnu 0x' + t.toString(16) + ', lecture arrêtée'); break; }
+        if (taille === -1) {
+          if (q + 4 > payload.length) { warnings.push('EVNT : NOTE tronquée'); break; }
+          taille = 1 + payload[q + 3];
+        }
+        if (q + 3 + taille > payload.length) { warnings.push('EVNT : charge utile tronquée (type 0x' + t.toString(16) + ')'); break; }
+        const evn = { type: t, delta: d };
+        if (t === EV.KEYDOWN || t === EV.KEYUP) { evn.line = payload[q + 3]; evn.mask = payload[q + 4]; }
+        evs.push(evn);
+        q += 3 + taille;
+      }
+      if (residu) { warnings.push('EVNT : ' + (payload.length - q) + ' octet(s) résiduel(s) après END'); }
+      if (!finVu) { warnings.push('EVNT : pas d\'événement END (flux incomplet)'); }
+      evnt = evs;
+    } else if (id === 'MDIA') {
+      if (payload.length < 8) { warnings.push('Chunk MDIA trop court'); }
+      else {
+        const dn = payload[7];
+        if (8 + dn > payload.length) { warnings.push('Nom de média MDIA tronqué'); }
+        else {
+          media.push({ lecteur: payload[0], format: payload[1],
+            taille: lireU32le(payload, 2), insere: payload[6],
+            nom: chaineOctets(payload, 8, dn) });
+        }
+      }
+    } else if (id === 'EMDA' || id === 'EMDB') {
+      emd.push({ id: id, taille: payload.length });
+    } else if (id === 'META') {
+      let s = '';
+      for (let q = 0; q < payload.length; q++) { s += String.fromCharCode(payload[q]); }
+      meta = s;
+    } else if (id !== 'STAT' && id !== 'FDCS' && id !== 'RSYN') {
+      warnings.push('Chunk "' + id.replace(/[^\x20-\x7E]/g, '?') + '" non décodé par cet outil (ignoré, conforme à la règle chunk inconnu = sauter)');
+    }
+    chunks.push({ id: id, longueur: l, crcOk: crcOk });
+  }
+  return { version: version, flags: flags, avecCrc: avecCrc, crcPresent: crcPresent,
+    crcTousOk: crcTousOk, chunks: chunks, warnings: warnings,
+    head: head, keyi: keyi, evnt: evnt, media: media, emd: emd, meta: meta };
+}
+
+// ---------------------------------------------------------------------------
+// Self-test : session SNR synthétique, conversion, contrôle, entrées hostiles.
+// ---------------------------------------------------------------------------
+function selfTest() {
+  const tests = [];
+  let pass = true;
+  const check = (nom, ok, detail) => {
+    tests.push({ test: nom, ok: !!ok, detail: detail === undefined ? '' : String(detail) });
+    if (!ok) { pass = false; }
+  };
+  const texte = (u8) => { let s = ''; for (let k = 0; k < u8.length; k++) { s += String.fromCharCode(u8[k]); } return s; };
+  const utf8 = (s) => { const a = []; for (let k = 0; k < s.length; k++) { a.push(s.charCodeAt(k) & 0xFF); } return a; };
+
+  const fabrique = (vs, fluxPerso) => {
+    const flux = fluxPerso || [0x05, 0x02, 0x00, 0x08, 0x00, 0x2C, 0x01, 0x81, 0x11, 0x02,
+      0x03, 0x04, 0x00, 0x01, 0x7F, 0x01, 0x00];
+    const u = new Uint8Array(0x100 + 12 + 13 + 9 + (4 + 10 + 72) + flux.length);
+    const posT = (o, s) => { for (let k = 0; k < s.length; k++) { u[o + k] = s.charCodeAt(k); } };
+    posT(0, 'RW - SNR');
+    u[0x10] = 3; u[0x6d] = 2; u[0xa4] = 0; u[0xb0] = vs ? 1 : 0;
+    posT(0xe0, 'WinAPE 2.0A2');
+    let p = 0x100;
+    const chunkTlv = (label, payload) => {
+      posT(p, label);
+      const l = payload.length;
+      u[p + 4] = l & 0xFF; u[p + 5] = (l >> 8) & 0xFF; u[p + 6] = (l >> 16) & 0xFF; u[p + 7] = (l >> 24) & 0xFF;
+      for (let k = 0; k < l; k++) { u[p + 8 + k] = payload[k]; }
+      p += 8 + l;
+    };
+    chunkTlv('MEM0', [0xDE, 0xAD, 0xBE, 0xEF]);
+    chunkTlv('DSCA', utf8('A.DSK'));
+    chunkTlv('SNRV', [0x01]);
+    posT(p, 'SNR ');
+    for (let k = 0; k < 10 + 72; k++) { u[p + 4 + k] = 0; }
+    for (let k = 0; k < flux.length; k++) { u[p + 86 + k] = flux[k]; }
+    return u;
+  };
+
+  let p = null;
+  try { p = parseSNR(fabrique(false)); }
+  catch (e) { check('parseSNR accepte le fichier synthétique', false, e.message); }
+  if (p) {
+    check('blocs balayés', p.blocks.length === 3 && p.blocks.map((b) => b.label).join(',') === 'MEM0,DSCA,SNRV', JSON.stringify(p.blocks));
+    check('nom DSCA', p.dscaNom === 'A.DSK', p.dscaNom);
+    check('modèle', p.model === 2, p.model);
+    check('CRTC', p.crtcType === 0, p.crtcType);
+    const s = p.events.map((e) => [e.type, e.line, e.mask, e.delta].join(':')).join(' ');
+    check('événements', s === '1:0:1:5 1:1:1:0 2:0:1:300 1:0:1:1', s);
+    check('END delta', p.endDelta === 1, p.endDelta);
+    check('stats appuis/relâchements', p.stats.appuis === 3 && p.stats.relachements === 1, p.stats.appuis + '/' + p.stats.relachements);
+    check('stats auto-repeat/sync', p.stats.autoRepeat === 1 && p.stats.synchronisation === 1, p.stats.autoRepeat + '/' + p.stats.synchronisation);
+    check('nombre de blocs', p.stats.blocs === 4, p.stats.blocs);
+    check('total trames', p.totalFrames === 307, p.totalFrames);
+    check('zéro avertissement', p.warnings.length === 0, JSON.stringify(p.warnings));
+  }
+
+  let pv = null;
+  try { pv = parseSNR(fabrique(true)); }
+  catch (e) { check('parseSNR variante VS', false, e.message); }
+  if (pv) {
+    check('VS : premier delta', pv.events.length > 0 && pv.events[0].delta === 6, pv.events[0] && pv.events[0].delta);
+    check('VS : total trames', pv.totalFrames === 308, pv.totalFrames);
+  }
+
+  if (p) {
+    let c = null;
+    try {
+      const media = { 'a.dsk': new Uint8Array([1, 2, 3]) };
+      c = buildCpsr(p, { crc32: true, embed: true, author: 'self-test',
+        sourceName: 'synth.snr', dateIso: '2026-11-24T12:00:00.000Z',
+        epoch: 1764000000000, media: media });
+    } catch (e) { check('buildCpsr', false, e.message); }
+    if (c) {
+      check('chunks produits', c.chunks.length === 7, c.chunks.map((x) => x.id).join(','));
+      const emb = c.chunks.find((x) => x.id === 'EMDA');
+      check('EMDA 3 octets', emb && emb.payload.length === 3, emb ? emb.payload.length : -1);
+      check('magic conteneur', texte(c.bytes.slice(0, 4)) === 'CPSR', texte(c.bytes.slice(0, 4)));
+      let v = null;
+      try { v = parseCPSR(c.bytes); } catch (e) { check('parseCPSR', false, e.message); }
+      if (v) {
+        check('contrôle : version', v.version === 1, v.version);
+        check('contrôle : 7 chunks', v.chunks.length === 7, v.chunks.length);
+        check('contrôle : CRC tous OK', v.avecCrc && v.crcTousOk, JSON.stringify(v.chunks.map((x) => x.crcOk)));
+        check('contrôle : HEAD trames', v.head && v.head.nbInterruptions === 307, v.head && v.head.nbInterruptions);
+        check('contrôle : HEAD événements', v.head && v.head.nbEvents === 4, v.head && v.head.nbEvents);
+        check('contrôle : HEAD durée', v.head && v.head.duree === 307, v.head && v.head.duree);
+        const se = v.evnt.map((e) => [e.type, e.line === undefined ? '' : e.line, e.mask === undefined ? '' : e.mask, e.delta].join(':')).join(' ');
+        check('contrôle : EVNT', se === '1:0:1:5 1:1:1:0 2:0:1:300 1:0:1:1 0:::1', se);
+        check('contrôle : MDIA', v.media.length === 1 && v.media[0].lecteur === 0 && v.media[0].format === 0 && v.media[0].nom === 'A.DSK' && v.media[0].taille === 3, JSON.stringify(v.media));
+        check('contrôle : avertissements CRC', v.warnings.length === 0, JSON.stringify(v.warnings));
+        let mj = null;
+        try { mj = JSON.parse(v.meta); } catch (e) { mj = null; }
+        check('contrôle : META JSON', mj !== null && mj['second-hand'] === true && mj.statistiques.trames === 307, v.meta && v.meta.slice(0, 40));
+      }
+    }
+  }
+
+  try { parseSNR(new Uint8Array(64)); check('hostile : fichier court rejeté', false, 'pas de rejet'); }
+  catch (e) { check('hostile : fichier court rejeté', e.name === 'CpsrErreur', e.name + ' - ' + e.message); }
+  try { parseSNR(new Uint8Array(0x100)); check('hostile : zéros rejeté', false, 'pas de rejet'); }
+  catch (e) { check('hostile : zéros rejeté', e.name === 'CpsrErreur', e.message); }
+  try {
+    const r = parseCPSR(new Uint8Array([0x43, 0x50, 0x53, 0x52, 1, 0, 0, 0, 4, 0, 0, 0]));
+    check('hostile : CPSR tronqué rejeté proprement', r.warnings.length > 0, JSON.stringify(r.warnings));
+  } catch (e) { check('hostile : CPSR tronqué rejeté proprement', e.name === 'CpsrErreur', e.name + ' - ' + e.message); }
+  try { parseCPSR(new Uint8Array(0x800)); check('hostile : aléa rejeté (CPSR)', false, 'pas de rejet'); }
+  catch (e) { check('hostile : aléa rejeté (CPSR)', e.name === 'CpsrErreur', e.name + ' - ' + e.message); }
+  try {
+    const corrompu = fabrique(false);
+    corrompu[0x100 + 6] = 0xFF; // longueur MEM0 rendue insolite
+    parseSNR(corrompu);
+    check('hostile : longueur de chunk corrompue rejetée proprement', false, 'pas de rejet');
+  } catch (e) { check('hostile : longueur de chunk corrompue rejetée proprement', e.name === 'CpsrErreur', e.name + ' - ' + e.message); }
+  try {
+    // touche hors matrice (ligne 10) : avertissement, pas de crash, aucun événement émis
+    const horsMatrice = fabrique(false, [0x05, 0x01, 0x50, 0x01, 0x00]);
+    const ph = parseSNR(horsMatrice);
+    check('hostile : code de touche hors matrice sans crash', ph.events.length === 0 && ph.warnings.length > 0,
+      'événements ' + ph.events.length + ', avertissements ' + ph.warnings.length);
+  } catch (e) { check('hostile : code de touche hors matrice sans crash', false, e.message); }
+
+  return { pass: pass, tests: tests };
+}
+
+const CPSR = { VERSION: VERSION, EV: EV, NOMS_MODELE: NOMS_MODELE, NOMS_FORMAT: NOMS_FORMAT,
+  parseSNR: parseSNR, buildCpsr: buildCpsr, parseCPSR: parseCPSR, selfTest: selfTest, crc32: crc32 };
+if (typeof globalThis !== 'undefined') { globalThis.CPSR = CPSR; }
+/* CPSR-CORE-END */
+
+// ---------------------------------------------------------------------------
+// Interface (navigateur uniquement).
+// ---------------------------------------------------------------------------
+(function () {
+  if (typeof document === 'undefined' || document.getElementById('journal') === null) { return; }
+  const journal = document.getElementById('journal');
+  const cartes = document.getElementById('zone-cartes');
+  const zoneDepots = document.getElementById('zone-depots');
+  const selFichiers = document.getElementById('fichiers');
+  const sessions = [];   // { nom, octets, analyse }
+  const verifications = [];
+  const medias = new Map(); // nom minuscule -> Uint8Array
+
+  const echappe = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const log = (m) => {
+    const d = document.createElement('div');
+    d.textContent = new Date().toLocaleTimeString() + ' - ' + m;
+    journal.appendChild(d);
+    journal.scrollTop = journal.scrollHeight;
+  };
+
+  const extensionDe = (nom) => {
+    const p = nom.lastIndexOf('.');
+    return p >= 0 ? nom.slice(p + 1).toLowerCase() : '';
+  };
+  const charge = (f) => {
+    const ext = extensionDe(f.name);
+    if (ext === 'snr' || ext === 'cpsr') { return true; }
+    if (ext === 'dsk' || ext === 'hfe' || ext === 'raw' || ext === 'ipf' || ext === 'cpr') { return true; }
+    log('Format non pris en charge : ' + f.name + ' (ignoré)');
+    return false;
+  };
+  const lireFichier = (f) => new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => { res(new Uint8Array(fr.result)); };
+    fr.onerror = () => { rej(fr.error); };
+    fr.readAsArrayBuffer(f);
+  });
+
+  const nomModele = (m) => (NOMS_MODELE[m] !== undefined ? NOMS_MODELE[m] : 'code ' + m);
+  const nomFormat = (fcode) => (NOMS_FORMAT[fcode] !== undefined ? NOMS_FORMAT[fcode] : 'code ' + fcode);
+
+  async function ajouteFichiers(liste) {
+    for (const f of liste) {
+      if (!charge(f)) { continue; }
+      try {
+        const octets = await lireFichier(f);
+        const ext = extensionDe(f.name);
+        if (ext === 'snr') {
+          const analyse = CPSR.parseSNR(octets);
+          sessions.push({ nom: f.name, octets: octets, analyse: analyse });
+          log('Session SNR chargée : ' + f.name + ' (' + octets.length + ' octets, ' + analyse.nbEvents + ' événements)');
+        } else if (ext === 'cpsr') {
+          const analyse = CPSR.parseCPSR(octets);
+          verifications.push({ nom: f.name, octets: octets, analyse: analyse });
+          log('Session CPSR chargée pour vérification : ' + f.name + ' (' + analyse.chunks.length + ' chunks)');
+        } else {
+          medias.set(f.name.toLowerCase(), octets);
+          log('Média enregistré : ' + f.name + ' (' + octets.length + ' octets)');
+        }
+      } catch (e) {
+        log('Rejet : ' + f.name + ' - ' + (e.name === 'CpsrErreur' ? '' : e.name + ' ') + e.message);
+      }
+    }
+    dessineCartes();
+  }
+
+  function mediaPresent(nom) {
+    if (!nom) { return false; }
+    return medias.has(nom.toLowerCase()) || medias.has(nomBase(nom).toLowerCase());
+  }
+
+  function dessineCartes() {
+    cartes.textContent = '';
+    for (const s of sessions) {
+      const a = s.analyse;
+      const div = document.createElement('div');
+      div.className = 'carte';
+      const secondes = (a.totalFrames / 50.08).toFixed(1).replace('.', ',');
+      let h = '<p class="titre">' + echappe(s.nom) + ' <span class="info">(' + s.octets.length + ' octets)</span></p>';
+      h += '<pre>Modèle : ' + echappe(nomModele(a.model)) + ' - type CRTC ' + a.crtcType + ' - ' + (a.vs ? 'snapshot au départ de VSYNC (VS)' : 'snapshot hors VSYNC');
+      h += '\nÉmulateur d\'origine : ' + echappe(a.emulator || '(non renseigné)');
+      h += '\nBlocs trouvés avant SNR : ' + a.blocks.map((b) => echappe(b.label)).join(', ');
+      h += '\nFrappes : ' + a.stats.appuis + ' appuis, ' + a.stats.relachements + ' relâchements - auto-repeat : ' + a.stats.autoRepeat + ' - synchronisations : ' + a.stats.synchronisation;
+      h += '\nPassés (non convertis) : souris ' + a.stats.souris + ', RTC ' + a.stats.rtc;
+      h += '\nDurée : ' + a.totalFrames + ' interruptions, environ ' + secondes + ' s à 50,08 Hz';
+      h += '\nMédia A : ' + (a.dscaNom ? echappe(a.dscaNom) + (mediaPresent(a.dscaNom) ? ' (fourni)' : ' (non fourni, référencé par nom)') : '(aucun)');
+      h += '\nMédia B : ' + (a.dscbNom ? echappe(a.dscbNom) + (mediaPresent(a.dscbNom) ? ' (fourni)' : ' (non fourni, référencé par nom)') : '(aucun)');
+      if (a.warnings.length) {
+        h += '\nAvertissements :';
+        for (const w of a.warnings) { h += '\n  - ' + echappe(w); }
+      }
+      h += '</pre>';
+      h += '<button type="button">Convertir</button>';
+      div.innerHTML = h;
+      div.querySelector('button').addEventListener('click', () => { convertit(s); });
+      cartes.appendChild(div);
+    }
+    for (const s of verifications) {
+      const a = s.analyse;
+      const div = document.createElement('div');
+      div.className = 'carte';
+      let h = '<p class="titre">' + echappe(s.nom) + ' <span class="info">(contrôle CPSR)</span></p>';
+      h += '<pre>Version : ' + a.version + ' - drapeaux : 0x' + a.flags.toString(16) + ' - chunks : ' + a.chunks.length;
+      h += '\n' + (a.avecCrc ? (a.crcTousOk ? 'CRC32 : tous OK' : 'CRC32 : INVALIDE(S), voir avertissements') : 'CRC32 : absent (drapeau bit0 non posé)');
+      for (const c of a.chunks) {
+        h += '\n  - ' + echappe(c.id) + ' (' + c.longueur + ' octets)' + (c.crcOk === null ? '' : (c.crcOk ? ' CRC OK' : ' CRC KO'));
+      }
+      if (a.head) {
+        h += '\nHEAD : ' + echappe(nomModele(a.head.model)) + ', CRTC ' + a.head.crtcType + ', ' + a.head.nbInterruptions + ' interruptions, ' + a.head.nbEvents + ' événements, durée ' + a.head.duree;
+        h += '\nÉmulateur : ' + echappe(a.head.emulateur);
+        if (a.head.duree !== null && a.evnt) {
+          let somme = 0;
+          for (const e of a.evnt) { somme += e.delta; }
+          h += '\nContrôle croisé durée/EVNT : ' + (somme === a.head.duree ? 'cohérent (' + somme + ')' : 'ÉCART (HEAD ' + a.head.duree + ', EVNT ' + somme + ')');
+        }
+      }
+      if (a.keyi) {
+        let kx = '';
+        for (const b of a.keyi) { kx += b.toString(16).padStart(2, '0') + ' '; }
+        h += '\nKEYI : ' + kx;
+      }
+      if (a.evnt) {
+        const kd = a.evnt.filter((e) => e.type === CPSR.EV.KEYDOWN).length;
+        const ku = a.evnt.filter((e) => e.type === CPSR.EV.KEYUP).length;
+        h += '\nEVNT : ' + a.evnt.length + ' événements (' + kd + ' appuis, ' + ku + ' relâchements)';
+      }
+      for (const m of a.media) {
+        h += '\nMDIA : lecteur ' + m.lecteur + ' (' + echappe(nomFormat(m.format)) + '), ' + echappe(m.nom) + ', ' + m.taille + ' octets, inséré : ' + m.insere;
+      }
+      for (const m of a.emd) {
+        h += '\n' + m.id + ' : ' + m.taille + ' octets embarqués';
+      }
+      if (a.warnings.length) {
+        h += '\nAvertissements :';
+        for (const w of a.warnings) { h += '\n  - ' + echappe(w); }
+      }
+      h += '</pre>';
+      div.innerHTML = h;
+      cartes.appendChild(div);
+    }
+  }
+
+  function telecharge(nom, octets) {
+    const blob = new Blob([octets], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nom;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => { URL.revokeObjectURL(url); }, 5000);
+  }
+
+  function convertit(s) {
+    const optCrc = document.getElementById('opt-crc').checked;
+    const optEmbed = document.getElementById('opt-embed').checked;
+    const auteur = document.getElementById('opt-auteur').value.trim();
+    const objMedia = {};
+    for (const [k, v] of medias.entries()) { objMedia[k] = v; }
+    const res = CPSR.buildCpsr(s.analyse, { crc32: optCrc, embed: optEmbed,
+      author: auteur, sourceName: s.nom, media: objMedia });
+    const cible = s.nom.replace(/\.[^.]*$/, '') + '.cpsr';
+    telecharge(cible, res.bytes);
+    log('Converti : ' + s.nom + ' -> ' + cible + ' (' + res.bytes.length + ' octets, ' + res.chunks.length + ' chunks, ' + (res.flags & 1 ? 'CRC32 actif' : 'sans CRC32') + ')');
+    for (const w of s.analyse.warnings) { log('  avertissement : ' + w); }
+  }
+
+  document.getElementById('btn-tout').addEventListener('click', () => {
+    if (sessions.length === 0) { log('Aucune session SNR à convertir.'); return; }
+    for (const s of sessions) { convertit(s); }
+  });
+  document.getElementById('btn-test').addEventListener('click', () => {
+    const r = CPSR.selfTest();
+    log('Self-test : ' + (r.pass ? 'TOUS les tests SONT PASSÉS' : 'ÉCHEC') + ' (' + r.tests.filter((t) => t.ok).length + '/' + r.tests.length + ')');
+    for (const t of r.tests) {
+      log('  [' + (t.ok ? 'OK' : 'KO') + '] ' + t.test + (t.detail ? ' - ' + t.detail : ''));
+    }
+  });
+
+  selFichiers.addEventListener('change', () => { ajouteFichiers(selFichiers.files); selFichiers.value = ''; });
+  ['dragenter', 'dragover'].forEach((ev) => zoneDepots.addEventListener(ev, (e) => { e.preventDefault(); zoneDepots.classList.add('survol'); }));
+  ['dragleave', 'drop'].forEach((ev) => zoneDepots.addEventListener(ev, (e) => { e.preventDefault(); zoneDepots.classList.remove('survol'); }));
+  zoneDepots.addEventListener('drop', (e) => {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { ajouteFichiers(e.dataTransfer.files); }
+  });
+
+  log('Prêt. Version du convertisseur : ' + CPSR.VERSION + '.');
+})();
+</script>
+</body>
+</html>
