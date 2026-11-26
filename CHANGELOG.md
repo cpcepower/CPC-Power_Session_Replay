@@ -13,3 +13,4 @@ lot 202611.1.2 (26/11/2026) :
 
 - SPEC.md : v0.3 - nouvelle section 1 bis "validation du diagnostic par mesures terrain" (identité à l'échelle trame mais divergence sous-trame à 3 unités d'un seuil critique ; 52 décalages d'ancrage testés sans restauration ; reprise depuis snapshot intermédiaire non fidèle ; compteur GA libre = session détruite) ; ligne Sugarbox actualisée (V2 = cœur CPCCore en C++17/Qt 6 : plus de portage C#, adoption directe de la lib C) ; ligne RetroArch complétée (core SugarLibRetro) ; statut du plan d'implémentation ajouté (phase 1 démarrée côté lecture).
 - README.md : statut actualisé (v0.3, validation terrain, phase 1 entamée, convertisseur validé sur une session réelle complète).
+- SPEC.md : prose nettoyé - plus aucune référence de lot dans le corps du document (le CHANGELOG reste le journal des lots) ; correction typographique (ligne WinAPE, section 10) et de mise en forme (ligne vide parasite en tête).
