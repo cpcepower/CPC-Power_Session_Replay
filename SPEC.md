@@ -40,8 +40,6 @@ Un cas réel particulièrement exigeant (jeu à fenêtres d'interruptions critiq
 - **Invariant matériel** : laisser le compteur d'interruptions GA en libre parcours (sans ré-ancrage à la VBL) détruit immédiatement la session : la position d'ancrage du GA est un invariant du matériel, pas un réglage d'implémentation.
 - **Corollaire pour D-6** : les moments sûrs ne se décrètent pas, ils se mesurent (moteur disquette éteint, upd765 idle, aucune frappe en cours : stabilité vérifiable trame par trame).
 
-Instrumentation, scripts et mesures complètes : dépôt privé CPCEPower_SDL_Multithread, branche lot-202611-cpsr (BILAN.md, tools_debug/).
-
 ## 2. Principes
 
 - **P1 - L'horloge est la machine émulée** : l'unité de temps maîtresse est l'interruption Gate Array (front montant de la demande d'interruption, ~50,08 Hz), comptée depuis le chargement du snapshot. Jamais la trame hôte.
@@ -184,4 +182,4 @@ Le spéc final est publié comme page unique (HTML/PDF versionné, campagne CPCW
 | 4 | WPC/WMEM + SCAN sous-trame | H6 : une session SNR historique qui décrochait est convertie puis ré-enregistrée en CPSR : la relecture reste stable |
 | 5 | lib publique + campagne adoption | publication + discussions |
 
-Statut au 26/11/2026 : phase 0 livrée (lot 202611.1.1), diagnostic validé par mesures terrain (section 1 bis) ; phase 1 démarrée côté lecture dans CPCEPower (conteneur + CRC32 + reconstruction du flux depuis EVNT, lot 202611.1 du dépôt privé) : il reste l'enregistrement natif, l'horloge interruption liée à la livraison et les oracles H1/H2/H3 ; phases 2 à 5 à faire. Le convertisseur statique est en outre validé sur une session réelle complète de 20 minutes (parsing exact, round-trip événement par événement, contrôle croisé durée/EVNT).
+Statut au 26/11/2026 : phase 0 livrée (lot 202611.1.1), diagnostic validé par mesures terrain (section 1 bis) ; phase 1 démarrée côté lecture dans CPCEPower (conteneur + CRC32 + reconstruction du flux depuis EVNT) : il reste l'enregistrement natif, l'horloge interruption liée à la livraison et les oracles H1/H2/H3 ; phases 2 à 5 à faire. Le convertisseur statique est en outre validé sur une session réelle complète de 20 minutes (parsing exact, round-trip événement par événement, contrôle croisé durée/EVNT).
