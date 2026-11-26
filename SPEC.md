@@ -1,10 +1,11 @@
-# CPSR - CPC Power Session Replay - spécification v0.2 (brouillon)
+# CPSR - CPC Power Session Replay - spécification v0.3 (brouillon)
 
 Format de session (enregistrement + relecture) pour émulateurs Amstrad CPC, synchronisé sur la VBL de la machine émulée (464/664/6128/Plus/GX4000).
 
-Ce document est la spécification de référence du format CPSR v0.2 (brouillon, 24/11/2026), conçu pour remplacer à terme le format SNR de WinAPE, dont les sessions décrochent pendant les chargements sur les autres émulateurs.
+Ce document est la spécification de référence du format CPSR v0.3 (brouillon, 26/11/2026 ; v0.2 initial : 24/11/2026), conçu pour remplacer à terme le format SNR de WinAPE, dont les sessions décrochent pendant les chargements sur les autres émulateurs.
 
-- Statut : brouillon v0.2.
+- Statut : brouillon v0.3.
+- Retours de terrain (26/11/2026) : le diagnostic D-1 à D-4 est confronté à un cas réel exigeant, instrumenté trame par trame dans CPCEPower (section 1 bis) ; l'instrumentation et les mesures complètes sont documentées dans le dépôt privé CPCEPower_SDL_Multithread, branche lot-202611-cpsr (BILAN.md, tools_debug/).
 - Décisions actées le 24/11/2026 : D1 (identité : CPSR, extension `.cpsr`, magic ASCII `CPSR`) ; D2 (l'image disque n'est pas liée au format : référence par nom dans `MDIA`, embarquement optionnel dans `EMDA`/`EMDB`) ; zéro dépendance (zlib, SHA-1 et MD5 retirés du v1, CRC32 par table intégrée).
 - Décisions ouvertes : D3 (granularité horloge v1), D4 (politique de resynchronisation par défaut), D5 (périmètre v1 : disque et K7 en v2), D6 (heuristique des moments sûrs des points de contrôle).
 - Auteur : Megachur. Licence : GPL-3.0 (cf. LICENSE). (c) 2026.
@@ -29,6 +30,17 @@ Le format SNR (WinAPE) = un snapshot SNA v3 (chunks MEMx/ROMS/DSCA/DSCB/CPC+) + 
 Ce diagnostic est cohérent avec l'expérience du corpus CPC-Power (444 sessions) : impossible pour les jeux multi-faces, obligation de démarrer l'enregistrement après les chargements, patchs manuels de SNR. Sources : aide WinAPE Recording Sessions (winape.net/help/sessions.html), article sessions CPC-Power (cpc-power.com/cpcarchives, page=articles&num=10), code CPCEPower `SNA.cpp`/`SNA.h`.
 
 **Conséquence de conception fondamentale** : la dérive inter-implémentations est inévitable (D-2, D-4). Un format fiable ne doit pas la nier (défaut du SNR), il doit l'assumer : ancrage sur la machine émulée + points de contrôle + resynchronisation + (option) attaches conditionnelles d'événements.
+
+## 1 bis. Validation du diagnostic par mesures terrain (novembre 2026)
+
+Un cas réel particulièrement exigeant (jeu à fenêtres d'interruptions critiques : une action de gameplay n'est possible que si la phase des événements dans la trame est exacte) a été instrumenté trame par trame dans CPCEPower : trace CSV de l'état GA/CRTC/mémoire à chaque front d'interruption, balayage exhaustif des phases d'ancrage (52 positions, 0 à 51 lignes) et session de reprise contrefactuelle depuis un snapshot intermédiaire. Résultats :
+
+- **D-1 confirmé quantitativement** : deux moteurs temporellement identiques à l'échelle trame (même compte de cycles par trame, dérive bornée à ±1,5 microseconde sur tous les blocs de synchronisation d'une session complète) divergent en sous-trame : au point critique, la valeur de gameplay évolue à 3 unités du seuil d'échec. Aucun des 52 décalages d'ancrage testés ne restaure le comportement de référence : un réglage de phase par émulateur est une impasse ; seul l'ancrage matériel (livraison juste après acquittement de l'interruption) est reproductible.
+- **D-3 confirmé** : la reprise depuis un snapshot intermédiaire ne reproduit pas la session d'origine (divergence mesurée avant la 240e interruption) : le SNA v3 ne figure pas la position raster au moment de la sauvegarde (compteurs CRTC en cours de trame, compteur GA). La réponse est le snapshot initial complet (STAT + ancre zéro), les points de contrôle (RSYN) et la resynchronisation : pas la reprise approximative.
+- **Invariant matériel** : laisser le compteur d'interruptions GA en libre parcours (sans ré-ancrage à la VBL) détruit immédiatement la session : la position d'ancrage du GA est un invariant du matériel, pas un réglage d'implémentation.
+- **Corollaire pour D-6** : les moments sûrs ne se décrètent pas, ils se mesurent (moteur disquette éteint, upd765 idle, aucune frappe en cours : stabilité vérifiable trame par trame).
+
+Instrumentation, scripts et mesures complètes : dépôt privé CPCEPower_SDL_Multithread, branche lot-202611-cpsr (BILAN.md, tools_debug/).
 
 ## 2. Principes
 
@@ -146,10 +158,10 @@ Coût moyen : 1 frappe = 5 octets (KEYDOWN) + 5 octets (KEYUP), soit ~10 octets/
 |-------|-------|---------------|
 | CPCEPower | intégration directe du noyau v1 | moyen |
 | WinAPE ( Richard Wilson ) | courtoisie + spéc ; pas d'obligation | nul (juste spéc + courrier) |
-| Sugarbox | approche directe possible (émulateur moderne, C# ; portage facile de la lib C en C#) | faible |
+| Sugarbox V2 (T. Guillemin) | approche directe : la V2 a migré de C# (V1) vers un cœur multi-plateforme CPCCore en C++17 (Qt 6, actif), qui alimente aussi le core libretro SugarLibRetro ; la lib C99 CPSR s'y intègre sans portage de langage (compilation C native à côté du cœur ou adaptation triviale en C++) | faible |
 | Caprice32 / nouveaux forks | issues avec la lib C | faible |
 | JS et web émulateurs (cpcecpc.eu ; CPC-Power / player Ym-Ay interne) | couche JS/TS de la même arborescence de spéc | moyen |
-| RetroArch (core caprice32) | via Caprice32 | faible si Caprice32 passe |
+| RetroArch (cores caprice32, SugarLibRetro) | via Caprice32, ou via le cœur CPCCore de Sugarbox (core libretro SugarLibRetro) dès que Sugarbox adopte | faible dès qu'un des deux cœurs passe |
 | CPCWiki / forums | page de spéc + débat forum émulateurs (thread "Playback format for scenes" déjà existant, 2010, sans suite) | communication |
 
 Le spéc final est publié comme page unique (HTML/PDF versionné, campagne CPCWiki + forum émulateurs), le lib C en GPL-3.0 ; l'adoption réelle se jouera sur les trois atouts face au SNR : ancre VBL (P1), points de contrôle avec resynchronisation effective (P3), attaches conditionnelles (WPC/WMEM).
@@ -171,3 +183,5 @@ Le spéc final est publié comme page unique (HTML/PDF versionné, campagne CPCW
 | 3 | RSYN (points de contrôle) + politique stricte en défaut | H5 : session avec chargement disque relue avec et sans injections de dérive artificielle (retard FDC simulé) : relecture stable en mode stricte |
 | 4 | WPC/WMEM + SCAN sous-trame | H6 : une session SNR historique qui décrochait est convertie puis ré-enregistrée en CPSR : la relecture reste stable |
 | 5 | lib publique + campagne adoption | publication + discussions |
+
+Statut au 26/11/2026 : phase 0 livrée (lot 202611.1.1), diagnostic validé par mesures terrain (section 1 bis) ; phase 1 démarrée côté lecture dans CPCEPower (conteneur + CRC32 + reconstruction du flux depuis EVNT, lot 202611.1 du dépôt privé) : il reste l'enregistrement natif, l'horloge interruption liée à la livraison et les oracles H1/H2/H3 ; phases 2 à 5 à faire. Le convertisseur statique est en outre validé sur une session réelle complète de 20 minutes (parsing exact, round-trip événement par événement, contrôle croisé durée/EVNT).
