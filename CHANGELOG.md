@@ -2,12 +2,24 @@
 
 ## 202611
 
-lot 202611.1.1 (24/11/2026) :
+lot 202611.1.6 (26/11/2026) :
 
-- SPEC.md : spécification CPSR v0.2 (brouillon) - diagnostic des décrochages SNR, horloge interruption Gate Array, conteneur TLV avec CRC32 sans dépendance, blocs HEAD/STAT/FDCS/KEYI/EVNT/RSYN/MDIA/EMDA/EMDB/META, points de contrôle et resynchronisation, médias référencés par nom ; décisions actées D1 (identité CPSR, extension .cpsr, magic CPSR) et D2 (le média n'est pas lié au format, embarquement optionnel).
-- tools/cpsr-convert.html : convertisseur autonome HTML5/JavaScript (miroir du lecteur SNR de CPCEPower, SNR.cpp/SNA.cpp) - conversion .snr vers .cpsr avec CRC32 et/ou embarquement média optionnels, mode vérification .cpsr (chunks, CRC32, décodage HEAD/KEYI/EVNT/MDIA/EMD), self-test 32 contrôles intégré, rejet propre des fichiers hostiles.
-- README.md : présentation du dépôt, usage du convertisseur, statut, licence.
-- CHANGELOG.md : création du fichier.
+- tools/cpsr-convert.html : boutons "Vider les sessions", "Vider les médias", "Tout vider" et "Retirer" (par session, par contrôle CPSR, par média) ; bouton "Fournir les médias..." sur chaque session convertie et sur chaque contrôle CPSR, avec la liste des fichiers à placer à côté du .cpsr (nom exact) ; carte des médias fournis ; texte d'introduction mis à jour (v0.4, VSYNC).
+
+lot 202611.1.5 (26/11/2026) :
+
+- tools/cpsr-convert.html : tous les formats de média lus par CPCEPower sont acceptés (DSK/EDSK, IPF, HFE, RAW CTRAW, CPR, XPR, CDT, CSW, WAV) ; cassette jointe par case à cocher (MDIA lecteur 3, EMDD) car le SNR n'en référence aucune.
+- SPEC.md : codes de format MDIA 5 = XPR, 6 = CDT, 7 = CSW, 8 = WAV ; lecteur 3 = cassette ; chunk EMDD.
+
+lot 202611.1.4 (26/11/2026) :
+
+- tools/cpsr-convert.html : la cartouche (chunk ROMS du SNR, fichier .cpr/.xpr) est reconnue comme média de la session (MDIA lecteur 2, embarquement EMDC) - elle était ignorée, seuls les disques étaient référencés ; recherche des médias fournis tolérante sur le nom (espaces, parenthèses, crochets remplacés par _ lors d'un envoi) ; "Tout convertir" espace les téléchargements (le navigateur proposait le nom du premier fichier aux suivants) ; avertissements de conversion affichés dans le journal (embarquement demandé mais média non fourni).
+- SPEC.md : MDIA lecteur 2 = cartouche, chunk EMDC, extraction des médias embarqués (nom MDIA sans chemin, jamais d'écrasement).
+
+lot 202611.1.3 (26/11/2026) :
+
+- SPEC.md : v0.4 - (A) horloge = front VSYNC vu par le Gate Array (une trame machine = 6 interruptions Z80), et non le nombre d'interruptions ; livraison au front, à la limite d'instruction suivante ; (B) polarité matérielle des évènements clavier : KEYDOWN = bits à 0 de la matrice, KEYUP = bits à 1, KEYI en polarité matérielle (FF x10 = aucune touche) ; conteneur version 2, les fichiers version 1 (brouillon v0.3, noms inversés) restent lisibles en échangeant les deux évènements ; (C) nouvel évènement SYNC (0x06) : témoin de dérive PC bas / VLC / HCC / cycle, jamais appliqué.
+- tools/cpsr-convert.html : conteneur de version 2, KEYDOWN/KEYUP en polarité matérielle, émission de SYNC depuis les blocs de synchronisation du SNR, auto-test mis à jour (stats appuis/relâchements, évènements).
 
 lot 202611.1.2 (26/11/2026) :
 
@@ -15,17 +27,9 @@ lot 202611.1.2 (26/11/2026) :
 - README.md : statut actualisé (v0.3, validation terrain, phase 1 entamée, convertisseur validé sur une session réelle complète).
 - SPEC.md : prose nettoyé - plus aucune référence de lot dans le corps du document (le CHANGELOG reste le journal des lots) ; correction typographique (ligne WinAPE, section 10) et de mise en forme (ligne vide parasite en tête).
 
-lot 202611.1.3 (26/11/2026) :
+lot 202611.1.1 (24/11/2026) :
 
-- SPEC.md : v0.4 - (A) horloge = front VSYNC vu par le Gate Array (une trame machine = 6 interruptions Z80), et non le nombre d'interruptions ; livraison au front, à la limite d'instruction suivante ; (B) polarité matérielle des évènements clavier : KEYDOWN = bits à 0 de la matrice, KEYUP = bits à 1, KEYI en polarité matérielle (FF x10 = aucune touche) ; conteneur version 2, les fichiers version 1 (brouillon v0.3, noms inversés) restent lisibles en échangeant les deux évènements ; (C) nouvel évènement SYNC (0x06) : témoin de dérive PC bas / VLC / HCC / cycle, jamais appliqué.
-- tools/cpsr-convert.html : conteneur de version 2, KEYDOWN/KEYUP en polarité matérielle, émission de SYNC depuis les blocs de synchronisation du SNR, auto-test mis à jour (stats appuis/relâchements, évènements).
-
-lot 202611.1.4 (26/11/2026) :
-
-- tools/cpsr-convert.html : la cartouche (chunk ROMS du SNR, fichier .cpr/.xpr) est reconnue comme média de la session (MDIA lecteur 2, embarquement EMDC) - elle était ignorée, seuls les disques étaient référencés ; recherche des médias fournis tolérante sur le nom (espaces, parenthèses, crochets remplacés par _ lors d'un envoi) ; "Tout convertir" espace les téléchargements (le navigateur proposait le nom du premier fichier aux suivants) ; avertissements de conversion affichés dans le journal (embarquement demandé mais média non fourni).
-- SPEC.md : MDIA lecteur 2 = cartouche, chunk EMDC, extraction des médias embarqués (nom MDIA sans chemin, jamais d'écrasement).
-
-lot 202611.1.5 (26/11/2026) :
-
-- tools/cpsr-convert.html : tous les formats de média lus par CPCEPower sont acceptés (DSK/EDSK, IPF, HFE, RAW CTRAW, CPR, XPR, CDT, CSW, WAV) ; cassette jointe par case à cocher (MDIA lecteur 3, EMDD) car le SNR n'en référence aucune.
-- SPEC.md : codes de format MDIA 5 = XPR, 6 = CDT, 7 = CSW, 8 = WAV ; lecteur 3 = cassette ; chunk EMDD.
+- SPEC.md : spécification CPSR v0.2 (brouillon) - diagnostic des décrochages SNR, horloge interruption Gate Array, conteneur TLV avec CRC32 sans dépendance, blocs HEAD/STAT/FDCS/KEYI/EVNT/RSYN/MDIA/EMDA/EMDB/META, points de contrôle et resynchronisation, médias référencés par nom ; décisions actées D1 (identité CPSR, extension .cpsr, magic CPSR) et D2 (le média n'est pas lié au format, embarquement optionnel).
+- tools/cpsr-convert.html : convertisseur autonome HTML5/JavaScript (miroir du lecteur SNR de CPCEPower, SNR.cpp/SNA.cpp) - conversion .snr vers .cpsr avec CRC32 et/ou embarquement média optionnels, mode vérification .cpsr (chunks, CRC32, décodage HEAD/KEYI/EVNT/MDIA/EMD), self-test 32 contrôles intégré, rejet propre des fichiers hostiles.
+- README.md : présentation du dépôt, usage du convertisseur, statut, licence.
+- CHANGELOG.md : création du fichier.
