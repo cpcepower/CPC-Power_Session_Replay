@@ -36,7 +36,7 @@ footer p { color: #7d8aa5; font-size: 0.8rem; border-top: 1px solid #2d3900;
 </head>
 <body>
 <h1>Convertisseur SNR - CPSR</h1>
-<p class="notice">Sessions enregistrées WinAPE (.snr) au format CPSR (CPC Power Session Replay, spécification v0.2), synchronisé sur les interruptions Gate Array de la machine émulée. Outil autonome : aucune dépendance, aucun accès réseau, fonctionne depuis un fichier local. Déposez un .cpsr pour le vérifier. Cf. SPEC.md dans le dépôt.</p>
+<p class="notice">Sessions enregistrées WinAPE (.snr) au format CPSR (CPC Power Session Replay, spécification v0.4), synchronisé sur les fronts VSYNC vus par le Gate Array de la machine émulée. Outil autonome : aucune dépendance, aucun accès réseau, fonctionne depuis un fichier local. Déposez un .cpsr pour le vérifier. Cf. SPEC.md dans le dépôt.</p>
 
 <div id="zone-options">
   <label><input type="checkbox" id="opt-crc" checked> CRC32 par chunk</label>
@@ -57,20 +57,24 @@ footer p { color: #7d8aa5; font-size: 0.8rem; border-top: 1px solid #2d3900;
 
 <p>
 <button type="button" id="btn-tout">Tout convertir</button>
+<button type="button" id="btn-vide-sessions">Vider les sessions</button>
+<button type="button" id="btn-vide-medias">Vider les médias</button>
+<button type="button" id="btn-vide-tout">Tout vider</button>
 <button type="button" id="btn-test">Self-test</button>
+<input type="file" id="fichiers-medias" multiple hidden accept=".dsk,.hfe,.raw,.ipf,.cpr,.xpr,.cdt,.csw,.wav">
 </p>
 
 <h2>Journal</h2>
 <div id="journal" aria-live="polite"></div>
 
 <footer>
-<p>lot 202611.1.1 - (c) 2026 Megachur - GPL-3.0-or-later (cf. LICENSE du dépôt).</p>
+<p>version 202611.1.6 - (c) 2026 Megachur - GPL-3.0-or-later (cf. LICENSE du dépôt).</p>
 </footer>
 
 <script>
 'use strict';
 /* CPSR-CORE-BEGIN */
-const VERSION = '202611.1.5';
+const VERSION = '202611.1.6';
 const EV = { END: 0x00, KEYDOWN: 0x01, KEYUP: 0x02, KEYSYNC: 0x03, JOY: 0x04,
   SCAN: 0x05, SYNC: 0x06, NOP: 0x0F, SNAP: 0x10, WMEM: 0x20, WPC: 0x21, WJOY: 0x22,
   MARK: 0xF0, NOTE: 0xF1 };
@@ -813,8 +817,42 @@ if (typeof globalThis !== 'undefined') { globalThis.CPSR = CPSR; }
     return false;
   }
 
+  const selMedias = document.getElementById('fichiers-medias');
+  const retire = (liste, s) => { const k = liste.indexOf(s); if (k >= 0) { liste.splice(k, 1); } dessineCartes(); };
+  const boutonFournir = (div) => {// ouvre le sélecteur de médias : ajoute les fichiers fournis puis redessine les cartes
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = 'Fournir les médias...';
+    b.addEventListener('click', () => { selMedias.click(); });
+    div.appendChild(b);
+  };
+  const boutonRetirer = (div, liste, s) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = 'Retirer';
+    b.addEventListener('click', () => { retire(liste, s); });
+    div.appendChild(b);
+  };
+  const dessineMedias = () => {// carte des médias fournis, chacun retirable
+    if (medias.size === 0) { return; }
+    const div = document.createElement('div');
+    div.className = 'carte';
+    div.innerHTML = '<p class="titre">Médias fournis (' + medias.size + ')</p>';
+    for (const [nom, octets] of medias.entries()) {
+      const ligne = document.createElement('div');
+      ligne.textContent = nom + ' (' + octets.length + ' octets) ';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Retirer';
+      b.addEventListener('click', () => { medias.delete(nom); dessineCartes(); });
+      ligne.appendChild(b);
+      div.appendChild(ligne);
+    }
+    cartes.appendChild(div);
+  };
   function dessineCartes() {
     cartes.textContent = '';
+    dessineMedias();
     for (const s of sessions) {
       const a = s.analyse;
       const div = document.createElement('div');
@@ -838,6 +876,8 @@ if (typeof globalThis !== 'undefined') { globalThis.CPSR = CPSR; }
       h += '<button type="button">Convertir</button>';
       div.innerHTML = h;
       div.querySelector('button').addEventListener('click', () => { convertit(s); });
+      boutonFournir(div);
+      boutonRetirer(div, sessions, s);
       cartes.appendChild(div);
     }
     for (const s of verifications) {
@@ -879,8 +919,15 @@ if (typeof globalThis !== 'undefined') { globalThis.CPSR = CPSR; }
         h += '\nAvertissements :';
         for (const w of a.warnings) { h += '\n  - ' + echappe(w); }
       }
+      const aFournir = a.media.filter((m) => !a.emd.some((e) => e.id === 'EMD' + 'ABCD'.charAt(m.lecteur)));
+      if (aFournir.length) {
+        h += '\nÀ placer à côté du .cpsr pour la relecture (nom exact) :';
+        for (const m of aFournir) { h += '\n  - ' + echappe(m.nom) + (mediaPresent(m.nom) ? ' (fourni ici)' : ' (non fourni ici)'); }
+      }
       h += '</pre>';
       div.innerHTML = h;
+      if (aFournir.length) { boutonFournir(div); }
+      boutonRetirer(div, verifications, s);
       cartes.appendChild(div);
     }
   }
@@ -923,6 +970,10 @@ if (typeof globalThis !== 'undefined') { globalThis.CPSR = CPSR; }
       for (const s of sessions) { convertit(s); await new Promise((ok) => setTimeout(ok, 700)); }
     })();
   });
+  document.getElementById('btn-vide-sessions').addEventListener('click', () => { sessions.length = 0; verifications.length = 0; dessineCartes(); log('Sessions vidées.'); });
+  document.getElementById('btn-vide-medias').addEventListener('click', () => { medias.clear(); dessineCartes(); log('Médias vidés.'); });
+  document.getElementById('btn-vide-tout').addEventListener('click', () => { sessions.length = 0; verifications.length = 0; medias.clear(); dessineCartes(); log('Tout vidé.'); });
+  selMedias.addEventListener('change', () => { ajouteFichiers(Array.from(selMedias.files)); selMedias.value = ''; });
   document.getElementById('btn-test').addEventListener('click', () => {
     const r = CPSR.selfTest();
     log('Self-test : ' + (r.pass ? 'TOUS les tests SONT PASSÉS' : 'ÉCHEC') + ' (' + r.tests.filter((t) => t.ok).length + '/' + r.tests.length + ')');
@@ -931,7 +982,7 @@ if (typeof globalThis !== 'undefined') { globalThis.CPSR = CPSR; }
     }
   });
 
-  selFichiers.addEventListener('change', () => { ajouteFichiers(selFichiers.files); selFichiers.value = ''; });
+  selFichiers.addEventListener('change', () => { ajouteFichiers(Array.from(selFichiers.files)); selFichiers.value = ''; });
   ['dragenter', 'dragover'].forEach((ev) => zoneDepots.addEventListener(ev, (e) => { e.preventDefault(); zoneDepots.classList.add('survol'); }));
   ['dragleave', 'drop'].forEach((ev) => zoneDepots.addEventListener(ev, (e) => { e.preventDefault(); zoneDepots.classList.remove('survol'); }));
   zoneDepots.addEventListener('drop', (e) => {
