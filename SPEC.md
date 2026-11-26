@@ -5,7 +5,7 @@ Format de session (enregistrement + relecture) pour émulateurs Amstrad CPC, syn
 Ce document est la spécification de référence du format CPSR v0.3 (brouillon, 26/11/2026 ; v0.2 initial : 24/11/2026), conçu pour remplacer à terme le format SNR de WinAPE, dont les sessions décrochent pendant les chargements sur les autres émulateurs.
 
 - Statut : brouillon v0.3.
-- Retours de terrain (26/11/2026) : le diagnostic D-1 à D-4 est confronté à un cas réel exigeant, instrumenté trame par trame dans CPCEPower (section 1 bis) ; l'instrumentation et les mesures complètes sont documentées dans le dépôt privé CPCEPower_SDL_Multithread, branche lot-202611-cpsr (BILAN.md, tools_debug/).
+- Retours de terrain (26/11/2026) : le diagnostic D-1 à D-4 est confronté à un cas réel exigeant, instrumenté trame par trame dans CPCEPower (section 1 bis).
 - Décisions actées le 24/11/2026 : D1 (identité : CPSR, extension `.cpsr`, magic ASCII `CPSR`) ; D2 (l'image disque n'est pas liée au format : référence par nom dans `MDIA`, embarquement optionnel dans `EMDA`/`EMDB`) ; zéro dépendance (zlib, SHA-1 et MD5 retirés du v1, CRC32 par table intégrée).
 - Décisions ouvertes : D3 (granularité horloge v1), D4 (politique de resynchronisation par défaut), D5 (périmètre v1 : disque et K7 en v2), D6 (heuristique des moments sûrs des points de contrôle).
 - Auteur : Megachur. Licence : GPL-3.0 (cf. LICENSE). (c) 2026.
