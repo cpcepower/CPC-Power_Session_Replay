@@ -9,9 +9,7 @@ Ce document est la spécification de référence du format CPSR v0.3 (brouillon,
 - Décisions actées le 24/11/2026 : D1 (identité : CPSR, extension `.cpsr`, magic ASCII `CPSR`) ; D2 (l'image disque n'est pas liée au format : référence par nom dans `MDIA`, embarquement optionnel dans `EMDA`/`EMDB`) ; zéro dépendance (zlib, SHA-1 et MD5 retirés du v1, CRC32 par table intégrée).
 - Décisions ouvertes : D3 (granularité horloge v1), D4 (politique de resynchronisation par défaut), D5 (périmètre v1 : disque et K7 en v2), D6 (heuristique des moments sûrs des points de contrôle).
 - Auteur : Megachur. Licence : GPL-3.0 (cf. LICENSE). (c) 2026.
-- Outils : convertisseur SNR -> CPSR : tools/cpsr-convert.html (lot 202611.1.1).
-
-
+- Outils : convertisseur SNR -> CPSR : tools/cpsr-convert.html.
 
 Projet : CPCEPower + compatibilité inter-émulateurs Amstrad CPC (464/664/6128/Plus/GX4000).
 Objectif : remplacer à terme le format SNR de WinAPE par un format de session (enregistrement + relecture) robuste à la dérive de synchronisation, adoptable par tous les émulateurs CPC.
@@ -155,7 +153,7 @@ Coût moyen : 1 frappe = 5 octets (KEYDOWN) + 5 octets (KEYUP), soit ~10 octets/
 | Cible | Canal | Effort estimé |
 |-------|-------|---------------|
 | CPCEPower | intégration directe du noyau v1 | moyen |
-| WinAPE ( Richard Wilson ) | courtoisie + spéc ; pas d'obligation | nul (juste spéc + courrier) |
+| WinAPE (Richard Wilson) | courtoisie + spéc ; pas d'obligation | nul (juste spéc + courrier) |
 | Sugarbox V2 (T. Guillemin) | approche directe : la V2 a migré de C# (V1) vers un cœur multi-plateforme CPCCore en C++17 (Qt 6, actif), qui alimente aussi le core libretro SugarLibRetro ; la lib C99 CPSR s'y intègre sans portage de langage (compilation C native à côté du cœur ou adaptation triviale en C++) | faible |
 | Caprice32 / nouveaux forks | issues avec la lib C | faible |
 | JS et web émulateurs (cpcecpc.eu ; CPC-Power / player Ym-Ay interne) | couche JS/TS de la même arborescence de spéc | moyen |
@@ -167,7 +165,7 @@ Le spéc final est publié comme page unique (HTML/PDF versionné, campagne CPCW
 ## 11. Migration SNR -> CPSR
 
 - **Convertisseur SNR -> CPSR** (outillage CPCEPower) : traduction 1-1 des deltas de trames en interruptions + reconstruction de HEAD/STAT/KEYI/MDIA, sans points de contrôle (traducteur pur, sans exécution).
-  Livré au lot 202611.1.1 : `cpsr-convert.html` (HTML5/JS autonome, W3C, zéro dépendance, fonctionne hors ligne), dépôt GitHub cpcepower/CPC-Power_Session_Replay (tools/cpsr-convert.html).
+  Livré : `cpsr-convert.html` (HTML5/JS autonome, W3C, zéro dépendance, fonctionne hors ligne), dépôt GitHub cpcepower/CPC-Power_Session_Replay (tools/cpsr-convert.html).
 - Le résultat couvre D-1 (ancre) mais pas D-2/D-3 : pour un corpus qui décroche, la récupération passe par **ré-enregistrement en lisant le SNR** (CPCEPower joue le SNR et ré-enregistre en CPSR avec points de contrôle WPC) - médiation pragmatique, héritant de la tempo propre du CPCEPower ; les fichiers convertis restent marqués "second hand" dans META.
 - Le support lecture SNR actuel **est conservé** (règle de non-régression : un nouveau format ne "vole" rien).
 
@@ -175,11 +173,11 @@ Le spéc final est publié comme page unique (HTML/PDF versionné, campagne CPCW
 
 | Phase | Contenu | Oracles |
 |-------|---------|----------------------|
-| 0 (lots de brouillon + 202611.1.1) | spéc v0.2 + décisions D1/D2 actées + convertisseur statique SNR->CPSR (cpsr-convert.html) | revue + validation user |
+| 0 | spéc v0.2 + décisions D1/D2 actées + convertisseur statique SNR->CPSR (cpsr-convert.html) | revue + validation user |
 | 1 | lib pure (parse/write) + intégration CPCEPower (record, playback, horloge interruption) : objectif sessions simples sans chargement | H1 : session synthétique entreprise (octets attendus exacts) ; H2 : round-trip lecture = écriture octet-exact ; H3 : non-régression SNR (le nouveau format ne détruit pas le chemin SNR actuel, corpus CPC-Power 444 fichiers en lecture) |
 | 2 | convertisseur SNR->CPSR | H4 : conversion trame par trame d'un petit corpus + vérification diff hexa |
 | 3 | RSYN (points de contrôle) + politique stricte en défaut | H5 : session avec chargement disque relue avec et sans injections de dérive artificielle (retard FDC simulé) : relecture stable en mode stricte |
 | 4 | WPC/WMEM + SCAN sous-trame | H6 : une session SNR historique qui décrochait est convertie puis ré-enregistrée en CPSR : la relecture reste stable |
 | 5 | lib publique + campagne adoption | publication + discussions |
 
-Statut au 26/11/2026 : phase 0 livrée (lot 202611.1.1), diagnostic validé par mesures terrain (section 1 bis) ; phase 1 démarrée côté lecture dans CPCEPower (conteneur + CRC32 + reconstruction du flux depuis EVNT) : il reste l'enregistrement natif, l'horloge interruption liée à la livraison et les oracles H1/H2/H3 ; phases 2 à 5 à faire. Le convertisseur statique est en outre validé sur une session réelle complète de 20 minutes (parsing exact, round-trip événement par événement, contrôle croisé durée/EVNT).
+Statut au 26/11/2026 : phase 0 livrée, diagnostic validé par mesures terrain (section 1 bis) ; phase 1 démarrée côté lecture dans CPCEPower (conteneur + CRC32 + reconstruction du flux depuis EVNT) : il reste l'enregistrement natif, l'horloge interruption liée à la livraison et les oracles H1/H2/H3 ; phases 2 à 5 à faire. Le convertisseur statique est en outre validé sur une session réelle complète de 20 minutes (parsing exact, round-trip événement par événement, contrôle croisé durée/EVNT).
