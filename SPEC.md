@@ -69,7 +69,7 @@ Offset  Taille  Rôle
 Puis une suite de chunks TLV :
 
 ```
-ID       4 octets ASCII  ('HEAD','STAT','FDCS','KEYI','EVNT','RSYN','MDIA','EMDA','EMDB','META')
+ID       4 octets ASCII  ('HEAD','STAT','FDCS','KEYI','EVNT','RSYN','MDIA','EMDA','EMDB','EMDC','EMDD','META')
 LEN      u32 LE          taille du payload
 PAYLOAD  LEN octets
 CRC32    u32 LE          sur ID+LEN+PAYLOAD (si flag bit0)
@@ -85,8 +85,8 @@ Règles : chunk inconnu = sauter via LEN (jamais rejeter le fichier) ; chunks re
 | `KEYI` | 10 octets d'état initial de la matrice clavier, **en polarité matérielle du CPC** : bit à 1 = touche relâchée, bit à 0 = touche appuyée (donc `FF` x10 = aucune touche). Même octets que le `SNR ` de WinAPE, sans les 72 octets souris/RTC |
 | `EVNT` | flux d'événements (section 6) |
 | `RSYN` | table des points de contrôle (section 7) : N entrées {u32 trame machine absolue, u8 type, u32 taille, snapshot inline} + éventuelles empreintes |
-| `MDIA` | descripteurs média par lecteur : u8 lecteur, u8 format (0=DSK,1=HFE,2=RAW,3=IPF,4=CPR), u32 taille, u8 inséré, u8 longueur, chaîne nom de fichier (info ; identification par nom, aucun hash - cf. section 8) |
-| `EMDA`/`EMDB` | média embarqué drive A/B : payload = image brute du média (décrit par MDIA) |
+| `MDIA` | descripteurs média par lecteur : u8 lecteur (0 = A, 1 = B, 2 = cartouche, 3 = cassette), u8 format (0=DSK/EDSK,1=HFE,2=RAW (CTRAW),3=IPF,4=CPR,5=XPR,6=CDT,7=CSW,8=WAV), u32 taille, u8 inséré, u8 longueur, chaîne nom de fichier (info ; identification par nom, aucun hash - cf. section 8) |
+| `EMDA`/`EMDB`/`EMDC`/`EMDD` | média embarqué lecteur A / lecteur B / cartouche / cassette : payload = image brute du média (décrit par MDIA du même lecteur). Un lecteur qui extrait un média embarqué l'écrit sous le nom de MDIA, sans chemin, sans jamais écraser un fichier existant |
 | `META` | UTF-8 : auteur, logiciel, commentaire, chrono, lien vers fiche CPC-Power (info) |
 
 ## 5. Horloge et livraison des événements
@@ -143,7 +143,7 @@ Coût moyen : 1 frappe = 5 octets (KEYDOWN) + 5 octets (KEYUP), soit ~10 octets/
 - **Le média n'est pas lié au format** (décision D2 actée le 24/11/2026) : par défaut l'image disque reste À CÔTÉ du conteneur, référencée par son nom dans `MDIA`. L'embarquement `EMDx` reste possible pour figer la session : si `EMDx` est présent, le média embarqué fait foi, le fichier externe est ignoré.
 - Embarquement `EMDx` possible mais non requis (D2) : pratiques selon le besoin ; le corpus CPC-Power qui distribue déjà SNR+DSK en zip reste lisible tel quel (session CPSR + image à côté), et l'embarquement produit un fichier unique figé.
 - Un changement de média en cours de session (changement de face) **ne fait pas partie de v1** : ré-enregistrer une session par-face est la règle v1 ; v2 étudiera un événement `MDIA-CHG` (éjection + insertion datée, suspend la session jusqu'à fourniture du média).
-- K7 : hors périmètre v1 (décision D5), le positionnement bande (compression/contre-pression) n'est pas couvert ; v2 : chunk `TAPE` (position bloc, image CDT/WAV + hash) sur le même modèle.
+- K7 : le média cassette (CDT/CSW/WAV) peut être référencé (MDIA lecteur 3) et embarqué (EMDD) ; hors périmètre v1 (décision D5) : le positionnement bande (compression/contre-pression) n'est pas couvert ; v2 : chunk `TAPE` (position bloc, image CDT/WAV + hash) sur le même modèle.
 
 ## 9. Exigences enregistreur / lecteur
 

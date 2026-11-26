@@ -19,3 +19,13 @@ lot 202611.1.3 (26/11/2026) :
 
 - SPEC.md : v0.4 - (A) horloge = front VSYNC vu par le Gate Array (une trame machine = 6 interruptions Z80), et non le nombre d'interruptions ; livraison au front, à la limite d'instruction suivante ; (B) polarité matérielle des évènements clavier : KEYDOWN = bits à 0 de la matrice, KEYUP = bits à 1, KEYI en polarité matérielle (FF x10 = aucune touche) ; conteneur version 2, les fichiers version 1 (brouillon v0.3, noms inversés) restent lisibles en échangeant les deux évènements ; (C) nouvel évènement SYNC (0x06) : témoin de dérive PC bas / VLC / HCC / cycle, jamais appliqué.
 - tools/cpsr-convert.html : conteneur de version 2, KEYDOWN/KEYUP en polarité matérielle, émission de SYNC depuis les blocs de synchronisation du SNR, auto-test mis à jour (stats appuis/relâchements, évènements).
+
+lot 202611.1.4 (26/11/2026) :
+
+- tools/cpsr-convert.html : la cartouche (chunk ROMS du SNR, fichier .cpr/.xpr) est reconnue comme média de la session (MDIA lecteur 2, embarquement EMDC) - elle était ignorée, seuls les disques étaient référencés ; recherche des médias fournis tolérante sur le nom (espaces, parenthèses, crochets remplacés par _ lors d'un envoi) ; "Tout convertir" espace les téléchargements (le navigateur proposait le nom du premier fichier aux suivants) ; avertissements de conversion affichés dans le journal (embarquement demandé mais média non fourni).
+- SPEC.md : MDIA lecteur 2 = cartouche, chunk EMDC, extraction des médias embarqués (nom MDIA sans chemin, jamais d'écrasement).
+
+lot 202611.1.5 (26/11/2026) :
+
+- tools/cpsr-convert.html : tous les formats de média lus par CPCEPower sont acceptés (DSK/EDSK, IPF, HFE, RAW CTRAW, CPR, XPR, CDT, CSW, WAV) ; cassette jointe par case à cocher (MDIA lecteur 3, EMDD) car le SNR n'en référence aucune.
+- SPEC.md : codes de format MDIA 5 = XPR, 6 = CDT, 7 = CSW, 8 = WAV ; lecteur 3 = cassette ; chunk EMDD.
