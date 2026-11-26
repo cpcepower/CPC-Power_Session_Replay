@@ -24,7 +24,7 @@ L'outil accepte les deux magics de session WinAPE ("RW - SNR" et "MV - SNA"), le
 
 ## Statut
 
-Spécification v0.3 (brouillon, 26/11/2026 ; v0.2 : 24/11/2026) : la phase 0 (spécification + convertisseur statique) est livrée (lot 202611.1.1) et le diagnostic est validé par mesures sur un cas réel exigeant (SPEC.md, section 1 bis). L'implémentation native dans CPCEPower est démarrée côté lecture (conteneur + CRC32 + reconstruction du flux EVNT) : enregistrement, points de contrôle RSYN et attaches conditionnelles WPC/WMEM suivent, de même qu'une lib C d'adoption pour d'autres émulateurs (cf. SPEC.md, section 12 ; Sugarbox V2 disposant désormais d'un cœur C++17, l'adoption y est directe). Le convertisseur, validé sur une session réelle complète (round-trip exact), marque les fichiers produits "second-hand" dans META (traduction 1-1, sans points de contrôle).
+Spécification v0.3 (brouillon, 26/11/2026 ; v0.2 : 24/11/2026) : la phase 0 (spécification + convertisseur statique) est livrée et le diagnostic est validé par mesures sur un cas réel exigeant (SPEC.md, section 1 bis). L'implémentation native dans CPCEPower est démarrée côté lecture (conteneur + CRC32 + reconstruction du flux EVNT) : enregistrement, points de contrôle RSYN et attaches conditionnelles WPC/WMEM suivent, de même qu'une lib C d'adoption pour d'autres émulateurs (cf. SPEC.md, section 12 ; Sugarbox V2 disposant désormais d'un cœur C++17, l'adoption y est directe). Le convertisseur, validé sur une session réelle complète (round-trip exact), marque les fichiers produits "second-hand" dans META (traduction 1-1, sans points de contrôle).
 
 ## Licence
 
