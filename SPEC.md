@@ -1,10 +1,10 @@
-# CPSR - CPC Power Session Replay - spécification v0.3 (brouillon)
+# CPSR - CPC Power Session Replay - spécification v0.4 (brouillon)
 
 Format de session (enregistrement + relecture) pour émulateurs Amstrad CPC, synchronisé sur la VBL de la machine émulée (464/664/6128/Plus/GX4000).
 
-Ce document est la spécification de référence du format CPSR v0.3 (brouillon, 26/11/2026 ; v0.2 initial : 24/11/2026), conçu pour remplacer à terme le format SNR de WinAPE, dont les sessions décrochent pendant les chargements sur les autres émulateurs.
+Ce document est la spécification de référence du format CPSR v0.4 (brouillon, 26/11/2026 ; v0.3 : 26/11/2026 ; v0.2 initial : 24/11/2026), conçu pour remplacer à terme le format SNR de WinAPE, dont les sessions décrochent pendant les chargements sur les autres émulateurs.
 
-- Statut : brouillon v0.3.
+- Statut : brouillon v0.4. Le conteneur passe en **version 2** : polarité matérielle des évènements clavier (section 6) et horloge définie sur le front VSYNC vu par le Gate Array (section 5). Les fichiers de version 1 (brouillon v0.3) restent lisibles (section 4).
 - Retours de terrain (26/11/2026) : le diagnostic D-1 à D-4 est confronté à un cas réel exigeant, instrumenté trame par trame dans CPCEPower (section 1 bis).
 - Décisions actées le 24/11/2026 : D1 (identité : CPSR, extension `.cpsr`, magic ASCII `CPSR`) ; D2 (l'image disque n'est pas liée au format : référence par nom dans `MDIA`, embarquement optionnel dans `EMDA`/`EMDB`) ; zéro dépendance (zlib, SHA-1 et MD5 retirés du v1, CRC32 par table intégrée).
 - Décisions ouvertes : D3 (granularité horloge v1), D4 (politique de resynchronisation par défaut), D5 (périmètre v1 : disque et K7 en v2), D6 (heuristique des moments sûrs des points de contrôle).
@@ -40,7 +40,7 @@ Un cas réel particulièrement exigeant (jeu à fenêtres d'interruptions critiq
 
 ## 2. Principes
 
-- **P1 - L'horloge est la machine émulée** : l'unité de temps maîtresse est l'interruption Gate Array (front montant de la demande d'interruption, ~50,08 Hz), comptée depuis le chargement du snapshot. Jamais la trame hôte.
+- **P1 - L'horloge est la machine émulée** : l'unité de temps maîtresse est la **trame machine** = un front de synchronisation verticale (VSYNC) vu par le Gate Array (~50,08 Hz), comptée depuis le chargement du snapshot. Jamais la trame hôte, jamais le nombre brut d'interruptions Z80 (il y en a 6 par trame).
 - **P2 - Les entrées sont physiques et adaptées à la machine** : événements exprimés en matrice clavier (ligne 0-9, masque 8 bits) et états joystick, pas en "touches logiques" mappées par l'émulateur.
 - **P3 - La dérive est traquée et corrigée** : points de contrôle embarqués (snapshots) à des moments sûrs + événements d'attache conditionnels (PC/mémoire) pour les zones à chargement.
 - **P4 - Conteneur extensible et auto-vérifié** : chunks TLV sautables (règle unknown = skip), CRC32 par chunk (code inline, aucune dépendance), réfs média par nom, média embarqué optionnel.
@@ -57,7 +57,7 @@ Les noms internes de chunks commencent tous par une majuscule et font 4 caractè
 ```
 Offset  Taille  Rôle
 0x00    4       Magic "CPSR"
-0x04    u16 LE  Version de format (0x0001)
+0x04    u16 LE  Version de format (0x0002 ; 0x0001 = brouillon v0.3 : mêmes chunks, mais KEYDOWN/KEYUP de polarité inverse, voir section 6)
 0x06    u16 LE  Flags
                   bit0 : CRC32 présent sur chaque chunk
                   bit1 : réservé (compression - non défini en v1, aucune dépendance externe)
@@ -79,37 +79,39 @@ Règles : chunk inconnu = sauter via LEN (jamais rejeter le fichier) ; chunks re
 
 | Chunk | Contenu |
 |-------|---------|
-| `HEAD` | u8 modèle CPC (codes SNA v3 : 0=464,1=664,2=6128,3=inconnu,4=6128+,5=464+,6=GX4000), u8 type CRTC, u32 nb total d'interruptions du fichier (info), u32 nb total d'événements (info), u64 date d'enregistrement (epoch, info), chaîne ASCII émulateur+version (info), u32 durée totale en interruptions du flux (contrôle, info) |
+| `HEAD` | u8 modèle CPC (codes SNA v3 : 0=464,1=664,2=6128,3=inconnu,4=6128+,5=464+,6=GX4000), u8 type CRTC, u32 nb total de trames machine du fichier (fronts VSYNC, info), u32 nb total d'événements (info), u64 date d'enregistrement (epoch, info), chaîne ASCII émulateur+version (info), u32 durée totale en trames machine du flux (contrôle, info) |
 | `STAT` | snapshot initial = corps SNA v3 complet (octets 0x10..fin, chunks MEMx/ROMS/... inclus) |
 | `FDCS` | état upd765 : phase de commande (u8), FIFO (16x u8 + compteurs), u8 PCN par lecteur, et par lecteur : piste (u8), face (u8), moteur (u8), inséré (u8), pointeur position sous-piste (u32) |
-| `KEYI` | 10 octets d'état initial de la matrice clavier (reprise sémantique du `SNR ` de WinAPE, sans les 72 octets souris/RTC) |
+| `KEYI` | 10 octets d'état initial de la matrice clavier, **en polarité matérielle du CPC** : bit à 1 = touche relâchée, bit à 0 = touche appuyée (donc `FF` x10 = aucune touche). Même octets que le `SNR ` de WinAPE, sans les 72 octets souris/RTC |
 | `EVNT` | flux d'événements (section 6) |
-| `RSYN` | table des points de contrôle (section 7) : N entrées {u32 interruption absolue, u8 type, u32 taille, snapshot inline} + éventuelles empreintes |
+| `RSYN` | table des points de contrôle (section 7) : N entrées {u32 trame machine absolue, u8 type, u32 taille, snapshot inline} + éventuelles empreintes |
 | `MDIA` | descripteurs média par lecteur : u8 lecteur, u8 format (0=DSK,1=HFE,2=RAW,3=IPF,4=CPR), u32 taille, u8 inséré, u8 longueur, chaîne nom de fichier (info ; identification par nom, aucun hash - cf. section 8) |
 | `EMDA`/`EMDB` | média embarqué drive A/B : payload = image brute du média (décrit par MDIA) |
 | `META` | UTF-8 : auteur, logiciel, commentaire, chrono, lien vers fiche CPC-Power (info) |
 
 ## 5. Horloge et livraison des événements
 
-- **Compteur maître** : `frame` = nombre d'interruptions Gate Array délivrées depuis le chargement de `STAT`. Incrémenté par l'émulateur sur chaque front d'interruption matériel émulé (PAS sur la trame hôte, PAS sur un timer réel).
-- **Convention de livraison** : un événement daté `frame N` est appliqué **juste après l'acquittement de l'interruption N, avant le premier opcode suivant** (l'état de la matrice est stable pour toute la trame). C'est le remède direct à D-1 : tout émulateur conforme obtient le même couple (état clavier, position dans la trame) au même moment machine.
-- **Ancre zéro** : le snapshot fige les compteurs internes du CRTC (SNA v3 0xa9-0xb7) : la trajectoire du CRTC depuis t=0 est donc identique pour tout émulateur précis, l'ancrage VBL est reproductible par construction.
+- **Compteur maître** : `frame` = nombre de **fronts VSYNC vus par le Gate Array** depuis le chargement de `STAT`. Le Gate Array détecte le front montant de VSYNC fourni par le CRTC (c'est ce signal qui remet à zéro son compteur de lignes d'interruption) : une trame machine = 6 interruptions Z80 consécutives (52 lignes), ~50,08 Hz. L'horloge est donc le front VSYNC vu par le GA, PAS le nombre d'interruptions Z80 (qui dépend de l'acquittement par le programme), PAS la trame hôte, PAS un timer réel.
+- **Convention de livraison** : un événement daté `frame N` est appliqué **au front VSYNC N tel que vu par le Gate Array, à la première limite d'instruction qui suit** (avant l'opcode suivant). L'état de la matrice est donc stable pour toute la trame. C'est le remède direct à D-1 : tout émulateur conforme obtient le même couple (état clavier, position dans la trame) au même moment machine. Cette convention est celle de CPCEPower (`snrFramePending`, positionné sur le front VS et consommé à la limite d'instruction suivante) ; elle a été validée par les mesures de la section 1 bis.
+- **Compte initial** : `STAT` est pris à un instant quelconque de la trame ; si le snapshot est sauvé pendant VSYNC (drapeau VS de SNA v3, octet 0xB0), le front courant est déjà passé et ne compte pas : le premier delta est ajusté en conséquence par l'enregistreur.
+- **Ancre zéro** : le snapshot fige les compteurs internes du CRTC (SNA v3 0xa9-0xb7) : la trajectoire du CRTC depuis t=0 est donc identique pour tout émulateur précis, l'ancrage VSYNC est reproductible par construction.
 - **Sous-trame optionnelle** : les protections qui échantillonnent le clavier en cours de trame sont couvertes par l'événement `SCAN` (section 6), précision ligne+CRTC, sans l'imposer partout.
 - **Frein volontaire** : la fréquence nominale (50,08 Hz) n'est jamais gravée : elle découle du matériel émulé. Aucune synchronisation sur l'horloge murale n'est requise pour une relecture conforme.
 
 ## 6. Flux d'événements `EVNT`
 
 Encodage générique : `[u8 type][u16 LE delta]` + charge utile propre au type.
-`delta` = nombre d'interruptions écoulées depuis l'événement précédent (0 = même trame, réservé aux types qui précisent une sous-position). Deltas > 65534 = insérer des `NOP` explicites (type 0x0F).
+`delta` = nombre de trames machine (fronts VSYNC, section 5) écoulées depuis l'événement précédent (0 = même trame). Deltas > 65534 = insérer des `NOP` explicites (type 0x0F).
 
 | Type | Nom | Payload | Sémantique |
 |------|-----|---------|------------|
 | 0x00 | END | (aucune) | fin du flux |
-| 0x01 | KEYDOWN | u8 ligne (0-9), u8 masque | bit à 1 dans la matrice |
-| 0x02 | KEYUP | u8 ligne, u8 masque | bit à 0 |
+| 0x01 | KEYDOWN | u8 ligne (0-9), u8 masque | **touche appuyée** : les bits du masque passent à **0** dans la matrice (polarité matérielle du CPC) |
+| 0x02 | KEYUP | u8 ligne, u8 masque | **touche relâchée** : les bits du masque passent à **1** |
 | 0x03 | KEYSYNC | 10 octets | ré-alignement explicite de toute la matrice (toujours émis par l'enregistreur **après chaque point de contrôle**, pour restaurer la cohérence auto-repeat/état) |
 | 0x04 | JOY | u8 index, u8 état (bit par direction+feu) | joystick émulé (port ou extension) |
 | 0x05 | SCAN | u8 ligne vidéo (0-311), u8 position CRTC char. (0-63) | s'applique **à l'événement suivant** : précision sous-trame au lieu de l'ancre trame |
+| 0x06 | SYNC | u8 PC bas, u8 VLC, u8 HCC, u8 cycle | **témoin de dérive**, jamais appliqué : position de la machine d'origine (PC bas, ligne verticale et caractère horizontal du CRTC, cycle dans la ligne) à cet instant ; le lecteur peut la comparer à la sienne pour mesurer la dérive (traduction directe des blocs de synchronisation du SNR, toutes les 840 trames chez WinAPE) |
 | 0x0F | NOP | (aucune) | occupant de delta long |
 | 0x10 | SNAP | u8 index RSYN | signal de relecture : point de contrôle atteint, appliquer la politique de resynchronisation (section 7) |
 | 0x20 | WMEM | u16 adresse, u8 valeur, u8 masque, u16 timeout_int | attente jusqu'à (mem[adresse] AND masque) == valeur, abandon à timeout (l'événement suivant est alors livré immédiatement) |
@@ -117,6 +119,8 @@ Encodage générique : `[u8 type][u16 LE delta]` + charge utile propre au type.
 | 0x22 | WJOY | néant, marqueur | l'événement suivant se déclenche à la première lecture du port joystick par le programme |
 | 0xF0 | MARK | u16 index | marqueur nommé (noms dans META), navigation dans la session |
 | 0xF1 | NOTE | u8 longueur + chaîne UTF-8 | annotation hors temporel (info) |
+
+**Polarité (v0.4)** : la matrice du CPC est active à zéro (bit à 1 = relâché, état initial `KEYI` = `FF` x10). `KEYDOWN` = appui = bits à 0 ; `KEYUP` = relâchement = bits à 1. Un masque peut porter plusieurs bits (un événement par ligne et par instant) ; un événement qui ne change aucun bit de la matrice suivie est un simple délai. `KEYSYNC` donne la matrice complète dans la même polarité. Les fichiers de version 1 (brouillon v0.3) avaient les noms inversés (KEYDOWN = bit à 1) : le lecteur échange les deux événements quand `version` < 2.
 
 Règles : consommation stricte séquentielle ; tout octet non couvert par le type selon sa table = fin propre de la relecture + erreur signalée (règle projet : fichiers hostiles = rejet propre sans crash).
 
@@ -126,13 +130,13 @@ Coût moyen : 1 frappe = 5 octets (KEYDOWN) + 5 octets (KEYUP), soit ~10 octets/
 
 ## 7. Points de contrôle et resynchronisation
 
-- L'enregistreur insère automatiquement un point de contrôle (snapshot complet SNA v3 inline dans `RSYN`, RLE comme pour les MEMx) dès que des conditions de **moment sûr** sont réunies ensemble pendant M trames consécutives : moteur(s) disquette(s) off + upd765 idle + pas d'événement clavier en cours + interruption constatée. Max 1 point de contrôle par K interruptions (défaut 1250 = 25 s). Au moins un point de contrôle à la fin d'un chargement si possible.
+- L'enregistreur insère automatiquement un point de contrôle (snapshot complet SNA v3 inline dans `RSYN`, RLE comme pour les MEMx) dès que des conditions de **moment sûr** sont réunies ensemble pendant M trames consécutives : moteur(s) disquette(s) off + upd765 idle + pas d'événement clavier en cours + front VSYNC constaté. Max 1 point de contrôle par K trames (défaut 1250 = 25 s). Au moins un point de contrôle à la fin d'un chargement si possible.
 - Impact taille : un snapshot ~130 Ko, le RLE des chunks MEMx (schéma 0xE5, celui du SNA v3) réduit à ~30-60 Ko typiques ; la densité par défaut reste raisonnable. Sans point de contrôle possible sur une plage > N trames, l'enregistreur insère un point de contrôle forcé quand même (avertissement dans META).
 - L'événement `SNAP` dans `EVNT` porte l'index ; à la relecture, **trois politiques** (config joueur) :
   - **douce** : indicateur seul (comparaison d'empreinte, cf ci-dessous), aucune action ;
   - **stricte (défaut recommandé)** : comparaison, et si empreinte diverge, rechargement du point de contrôle + reprise du flux immédiatement après le `KEYSYNC` suivant (resynchronisation effective, fin du vert/rouge qui ne fait rien) ;
   - **ferme** : rechargement systématique à chaque SNAP (determinisme par tranches ; mode compatibilité maximale inter-émulateurs).
-- **Empreinte** (pour l'indicateur et la détection) : CRC32 de zones RAM choisies par l'enregistreur (fenêtres de 256 octets lues en 3 zones stables heuristiques lors de l'émission du point de contrôle) + u32 interruption attendue. Tolérance par fenêtre de ±4 interruptions sur la relecture : la comparaison est indicative, jamais fatale.
+- **Empreinte** (pour l'indicateur et la détection) : CRC32 de zones RAM choisies par l'enregistreur (fenêtres de 256 octets lues en 3 zones stables heuristiques lors de l'émission du point de contrôle) + u32 trame attendue. Tolérance par fenêtre de ±4 trames sur la relecture : la comparaison est indicative, jamais fatale.
 
 ## 8. Médias
 
@@ -143,8 +147,8 @@ Coût moyen : 1 frappe = 5 octets (KEYDOWN) + 5 octets (KEYUP), soit ~10 octets/
 
 ## 9. Exigences enregistreur / lecteur
 
-- **Enregistreur** : les événements sont capturés lors du front d'interruption Gate Array (tampon applicatif), pas au fil de l'eau de la boucle hôte. L'enregistrement se fait depuis l'état initial (snapshot OBLIGATOIRE en début d'enregistrement, pas de record depuis le "READY" du BASIC - cause de D-1 documentée par CPC-Power elle-même pour le SNR).
-- **Lecteur** : état de la matrice clavier piloté par le noyau en mémoire directement (comme pour l'OSD), ancrage du compteur sur le front Gate Array (site déjà identifiable via `ga->gaHsyncCounter`/`crtc->VS` dans CPCEPower).
+- **Enregistreur** : les événements sont capturés au front VSYNC vu par le Gate Array (tampon applicatif), pas au fil de l'eau de la boucle hôte. L'enregistrement se fait depuis l'état initial (snapshot OBLIGATOIRE en début d'enregistrement, pas de record depuis le "READY" du BASIC - cause de D-1 documentée par CPC-Power elle-même pour le SNR).
+- **Lecteur** : état de la matrice clavier piloté par le noyau en mémoire directement (comme pour l'OSD), ancrage de l'horloge sur le front VSYNC vu par le Gate Array (site déjà identifiable via `ga->gaHsyncCounter`/`crtc->VS` dans CPCEPower) ; événements livrés à la limite d'instruction suivante.
 - **Zéro dépendance** (acté le 24/11/2026) : enregistrement et relecture sont du code pur de l'émulateur, aucune bibliothèque tierce (zlib retiré du v1 ; CRC32 = table inline ~15 lignes). Une lib C99 optionnelle (`libcpsr-lect`, `libcpsr-ecrit`) pourra accompagner l'adoption par d'autres émulateurs (C/C++), avec une couche d'adaptation minimale par émulateur (fournir : état clavier matrice, front interruption, PC, mémoire, FDC), sans jamais être un prérequis de CPCEPower.
 - **Portabilité** : il faut que 464, 664, 6128, 6128+, 464+ et GX4000 passent tous (chunks CPC+ de SNA v3 inclus), aucun modèle dans un sous-ensemble strict.
 
@@ -164,7 +168,7 @@ Le spéc final est publié comme page unique (HTML/PDF versionné, campagne CPCW
 
 ## 11. Migration SNR -> CPSR
 
-- **Convertisseur SNR -> CPSR** (outillage CPCEPower) : traduction 1-1 des deltas de trames en interruptions + reconstruction de HEAD/STAT/KEYI/MDIA, sans points de contrôle (traducteur pur, sans exécution).
+- **Convertisseur SNR -> CPSR** (outillage CPCEPower) : traduction 1-1 des deltas de trames (identiques : la trame SNR est déjà un front VS) + reconstruction de HEAD/STAT/KEYI/MDIA, sans points de contrôle (traducteur pur, sans exécution).
   Livré : `cpsr-convert.html` (HTML5/JS autonome, W3C, zéro dépendance, fonctionne hors ligne), dépôt GitHub cpcepower/CPC-Power_Session_Replay (tools/cpsr-convert.html).
 - Le résultat couvre D-1 (ancre) mais pas D-2/D-3 : pour un corpus qui décroche, la récupération passe par **ré-enregistrement en lisant le SNR** (CPCEPower joue le SNR et ré-enregistre en CPSR avec points de contrôle WPC) - médiation pragmatique, héritant de la tempo propre du CPCEPower ; les fichiers convertis restent marqués "second hand" dans META.
 - Le support lecture SNR actuel **est conservé** (règle de non-régression : un nouveau format ne "vole" rien).
@@ -174,8 +178,8 @@ Le spéc final est publié comme page unique (HTML/PDF versionné, campagne CPCW
 | Phase | Contenu | Oracles |
 |-------|---------|----------------------|
 | 0 | spéc v0.2 + décisions D1/D2 actées + convertisseur statique SNR->CPSR (cpsr-convert.html) | revue + validation user |
-| 1 | lib pure (parse/write) + intégration CPCEPower (record, playback, horloge interruption) : objectif sessions simples sans chargement | H1 : session synthétique entreprise (octets attendus exacts) ; H2 : round-trip lecture = écriture octet-exact ; H3 : non-régression SNR (le nouveau format ne détruit pas le chemin SNR actuel, corpus CPC-Power 444 fichiers en lecture) |
-| 2 | convertisseur SNR->CPSR | H4 : conversion trame par trame d'un petit corpus + vérification diff hexa |
+| 1 | lib pure (parse/write) + intégration CPCEPower (record, playback, horloge front VSYNC) : objectif sessions simples sans chargement | H1 : session synthétique entreprise (octets attendus exacts) ; H2 : round-trip lecture = écriture octet-exact ; H3 : non-régression SNR (le nouveau format ne détruit pas le chemin SNR actuel, corpus CPC-Power 444 fichiers en lecture) |
+| 2 | convertisseur SNR->CPSR (livré en v0.4 : polarité matérielle, événement SYNC) | H4 : conversion trame par trame d'un petit corpus + vérification diff hexa |
 | 3 | RSYN (points de contrôle) + politique stricte en défaut | H5 : session avec chargement disque relue avec et sans injections de dérive artificielle (retard FDC simulé) : relecture stable en mode stricte |
 | 4 | WPC/WMEM + SCAN sous-trame | H6 : une session SNR historique qui décrochait est convertie puis ré-enregistrée en CPSR : la relecture reste stable |
 | 5 | lib publique + campagne adoption | publication + discussions |
